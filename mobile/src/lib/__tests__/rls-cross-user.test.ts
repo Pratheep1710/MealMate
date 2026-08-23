@@ -57,12 +57,18 @@ jest.setTimeout(30000);
 // the hang is specifically in consuming the response *body* (res.text()/res.json() never
 // resolves). @supabase/auth-js builds its request `headers` via `new Headers(...)` against
 // whatever the *global* Headers constructor is — which, under jest-expo, is the RN/web polyfill
-// merged in by @react-native/jest-preset's setupFiles, not undici's own. Passing that
-// foreign-constructor Headers instance into undici's fetch (which is strict about the shape of
-// its inputs internally) is a known way to break its response body stream handling. Normalizing
-// every header through undici's *own* Headers class before the request goes out avoids that
-// mismatch — this is the actual fix; the timeout below is now just a safety net, not the
-// diagnostic tool it was before.
+// merged in by @react-native/jest-preset's setupFiles, not undici's own. Normalizing every header
+// through undici's own Headers class avoids passing it a foreign-constructor instance, but wasn't
+// the actual fix (kept anyway as harmless defense in depth).
+//
+// The actual root cause, found by comparing this fetch's response headers against a curl request
+// to the identical endpoint (added as a CI diagnostic step): curl's plain request got back a
+// response with NO Content-Encoding header — Cloudflare/Supabase served it uncompressed. fetch()
+// automatically sends `Accept-Encoding: gzip, deflate, br`, so the same endpoint served *this*
+// request `content-encoding: gzip` instead — and undici's automatic gzip decompression is what
+// hangs (confirmed: headers arrive in ~500ms either way, but only the compressed response's body
+// never resolves). Forcing `Accept-Encoding: identity` here matches curl's successful uncompressed
+// path exactly, sidestepping undici's decompression path entirely.
 function timedFetch(
   input: Parameters<typeof undiciFetch>[0],
   init: Parameters<typeof undiciFetch>[1] = {},
@@ -72,6 +78,7 @@ function timedFetch(
     ? AbortSignal.any([init.signal as AbortSignal, timeoutSignal])
     : timeoutSignal;
   const headers = new Headers(init.headers as HeadersInit | undefined);
+  headers.set('accept-encoding', 'identity');
   return undiciFetch(input, { ...init, headers, signal });
 }
 
