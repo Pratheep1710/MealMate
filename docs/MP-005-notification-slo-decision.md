@@ -12,8 +12,8 @@
 
 ## Measurement rule
 - **Numerator:** rows in `notification_log` where `notification_type = 'daily_reminder'` and
-  `status = 'delivered'`, with `updated_at` (delivered-status timestamp) within 10 minutes of that
-  day's 8 PM IST cron fire time.
+  `status = 'delivered'`, with `delivered_at` within 10 minutes of that day's 8 PM IST cron fire
+  time.
 - **Denominator:** all `daily_reminder` rows created for that day's cron run (i.e., all users
   eligible for a reminder that evening), regardless of eventual status.
 - **Window:** rolling 7-day measurement, recomputed daily, once real usage exists — not enforced
@@ -22,8 +22,12 @@
   window both count against the numerator (i.e., are treated as not-delivered-in-window).
 
 ## What this means for downstream tasks
-- No new schema — `notification_log` (MP-010) already carries the fields this measurement needs
-  (`status`, `created_at`, `updated_at`). This decision only defines how to query it, not a new table.
+- `notification_log` (MP-010) needed one addition: a `delivered_at` column (migration `0008`,
+  PR #1 review). The original plan to reuse `updated_at` as the delivered timestamp was wrong —
+  Postgres's `default now()` only fires on INSERT, so `updated_at` never actually reflects when a
+  row transitioned to `delivered` without an explicit trigger, which would have silently let late
+  deliveries measure as on-time. The reconciliation job (technical spec §2.2) must set
+  `delivered_at = now()` atomically with the `status = 'delivered'` write, not rely on any default.
 - No automated alerting on this SLO in v1 (technical spec §7/§8 already defer that) — it's a query
   against `notification_log`, not a monitored/paged metric yet.
 

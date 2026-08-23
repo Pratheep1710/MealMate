@@ -61,6 +61,15 @@ jobs:
         run: python -m mypy app/
 
       - name: pytest
+        # MP-012's live sign-in test (test_supabase_auth.py) needs these to actually run instead
+        # of skipping — see docs/MP-006-MP-012-supabase-setup.md. Secrets aren't exposed to
+        # pull_request runs from forks (GitHub default), so this test correctly falls back to
+        # skipping there; safe for this repo since only the owner can push/open same-repo PRs.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_TEST_USER_EMAIL: ${{ secrets.SUPABASE_TEST_USER_EMAIL }}
+          SUPABASE_TEST_USER_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_PASSWORD }}
         run: python -m pytest tests/ -v
 
       - name: pip-audit

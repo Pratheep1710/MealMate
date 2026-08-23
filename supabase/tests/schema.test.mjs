@@ -52,6 +52,40 @@ describe('MP-007 — dish and ingredient schema', () => {
     const aliasCount = await db.query(`select count(*)::int as n from ingredient_aliases`);
     expect(aliasCount.rows[0].n).toBe(0);
   });
+
+  it('MP-007a review fix: dish_ingredients supports optional quantity+unit for grocery aggregation', async () => {
+    const dish = await db.query(
+      `insert into dishes (name, item_type, veg_or_nonveg) values ('Sambar', 'gravy', 'veg') returning id`
+    );
+    const dal = await db.query(`insert into ingredients (canonical_name) values ('Toor dal') returning id`);
+    const salt = await db.query(`insert into ingredients (canonical_name) values ('Salt') returning id`);
+
+    // known quantity: both quantity and unit present
+    const withQty = await db.query(
+      `insert into dish_ingredients (dish_id, ingredient_id, quantity, unit) values ($1, $2, 100, 'grams')
+       returning quantity, unit`,
+      [dish.rows[0].id, dal.rows[0].id]
+    );
+    expect(Number(withQty.rows[0].quantity)).toBe(100);
+    expect(withQty.rows[0].unit).toBe('grams');
+
+    // presence-only remains valid (e.g. "to taste" ingredients) — both null
+    const noQty = await db.query(
+      `insert into dish_ingredients (dish_id, ingredient_id) values ($1, $2) returning quantity, unit`,
+      [dish.rows[0].id, salt.rows[0].id]
+    );
+    expect(noQty.rows[0].quantity).toBeNull();
+    expect(noQty.rows[0].unit).toBeNull();
+
+    // quantity without a unit (or vice versa) is rejected — half-specified is worse than absent
+    const pepper = await db.query(`insert into ingredients (canonical_name) values ('Pepper') returning id`);
+    await expect(
+      db.query(`insert into dish_ingredients (dish_id, ingredient_id, quantity) values ($1, $2, 5)`, [
+        dish.rows[0].id,
+        pepper.rows[0].id,
+      ])
+    ).rejects.toThrow();
+  });
 });
 
 describe('MP-008 — user profile and favorites schema', () => {
@@ -135,6 +169,49 @@ describe('MP-009 — meal plan schema', () => {
     );
     expect(item.rows[0].make_extra).toBe(false); // default
   });
+
+  it('MP-009 review fix: plan_items can represent the needs_manual_pick fallback state (technical spec §5.1)', async () => {
+    await db.query(`insert into user_profiles (id, grocery_day) values ($1, 'saturday')`, [USER_A]);
+    const plan = await db.query(
+      `insert into meal_plans (user_id, plan_date, slot) values ($1, '2026-08-26', 'night') returning id`,
+      [USER_A]
+    );
+
+    // needs_manual_pick with no dish assigned yet — the whole point of the fallback state
+    const item = await db.query(
+      `insert into plan_items (plan_id, item_type, status) values ($1, 'gravy', 'needs_manual_pick') returning status, dish_id`,
+      [plan.rows[0].id]
+    );
+    expect(item.rows[0].status).toBe('needs_manual_pick');
+    expect(item.rows[0].dish_id).toBeNull();
+
+    // default status is 'filled', and 'filled' with no dish_id is rejected
+    await expect(
+      db.query(`insert into plan_items (plan_id, item_type) values ($1, 'poriyal')`, [plan.rows[0].id])
+    ).rejects.toThrow();
+
+    // an unrecognized status is rejected
+    await expect(
+      db.query(`insert into plan_items (plan_id, item_type, status) values ($1, 'rice', 'bogus')`, [
+        plan.rows[0].id,
+      ])
+    ).rejects.toThrow();
+  });
+
+  it('MP-009 review fix: meal_plans.is_skipped defaults to false and can mark a slot as not cooked (functional spec §6)', async () => {
+    await db.query(`insert into user_profiles (id, grocery_day) values ($1, 'saturday')`, [USER_A]);
+    const plan = await db.query(
+      `insert into meal_plans (user_id, plan_date, slot) values ($1, '2026-08-27', 'afternoon') returning is_skipped`,
+      [USER_A]
+    );
+    expect(plan.rows[0].is_skipped).toBe(false);
+
+    const updated = await db.query(
+      `update meal_plans set is_skipped = true where user_id = $1 and plan_date = '2026-08-27' returning is_skipped`,
+      [USER_A]
+    );
+    expect(updated.rows[0].is_skipped).toBe(true);
+  });
 });
 
 describe('MP-010 — generation and notification tables', () => {
@@ -166,6 +243,30 @@ describe('MP-010 — generation and notification tables', () => {
         [USER_A]
       )
     ).rejects.toThrow();
+  });
+
+  it('MP-005 review fix: delivered_at is a distinct column from updated_at, set explicitly on delivery', async () => {
+    await db.query(`insert into user_profiles (id, grocery_day) values ($1, 'saturday')`, [USER_A]);
+    const inserted = await db.query(
+      `insert into notification_log (user_id, notification_type, target_date) values ($1, 'daily_reminder', '2026-08-25') returning delivered_at`,
+      [USER_A]
+    );
+    expect(inserted.rows[0].delivered_at).toBeNull(); // not delivered yet
+
+    // updating status alone must NOT retroactively populate delivered_at — that's exactly the bug
+    // this column exists to avoid (updated_at's default only fires on INSERT, so the reconciliation
+    // job must set delivered_at explicitly, not rely on any column default doing it implicitly)
+    const statusOnly = await db.query(
+      `update notification_log set status = 'sent' where user_id = $1 and target_date = '2026-08-25' returning delivered_at`,
+      [USER_A]
+    );
+    expect(statusOnly.rows[0].delivered_at).toBeNull();
+
+    const delivered = await db.query(
+      `update notification_log set status = 'delivered', delivered_at = now() where user_id = $1 and target_date = '2026-08-25' returning delivered_at`,
+      [USER_A]
+    );
+    expect(delivered.rows[0].delivered_at).not.toBeNull();
   });
 });
 
