@@ -3,15 +3,51 @@ import 'react-native-url-polyfill/auto';
 import { createClient, type SupportedStorage } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 // MP-023: session tokens must never sit in plaintext storage. expo-secure-store is backed by the
 // iOS Keychain / Android Keystore, not AsyncStorage — this adapter is the only place session data
-// touches disk, so there is exactly one path to audit for that guarantee.
-const SecureStoreAdapter: SupportedStorage = {
-  getItem: (key: string) => SecureStore.getItemAsync(key),
-  setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
-  removeItem: (key: string) => SecureStore.deleteItemAsync(key),
-};
+// touches disk on native, so there is exactly one path to audit for that guarantee.
+//
+// expo-secure-store has no web implementation (it throws — there's no Keychain/Keystore
+// equivalent in a browser), so on web this falls back to localStorage instead. That's the
+// standard Expo pattern for this gap, not a security regression for v1: the app's real distribution
+// target is native (iOS/Android, per docs/MP-001's scope), and the browser's storage isolation
+// model is a different (same-origin, not cross-app) threat model than the one SecureStore guards
+// against on native. Without this branch the web build never leaves its loading spinner — see the
+// caught TypeError from SecureStore.getItemAsync during session recovery (found by actually
+// running `expo start --web` and driving it in a browser, not by any unit test).
+//
+// Takes `platformOS` as a parameter (rather than reading Platform.OS internally) so the branch is
+// testable as a plain function — jest-expo's test environment doesn't simulate the web platform
+// well enough to mock Platform.OS itself reliably.
+export function createSessionStorage(platformOS: string): SupportedStorage {
+  if (platformOS === 'web') {
+    return {
+      getItem: (key: string) =>
+        Promise.resolve(typeof localStorage === 'undefined' ? null : localStorage.getItem(key)),
+      setItem: (key: string, value: string) => {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(key, value);
+        }
+        return Promise.resolve();
+      },
+      removeItem: (key: string) => {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem(key);
+        }
+        return Promise.resolve();
+      },
+    };
+  }
+  return {
+    getItem: (key: string) => SecureStore.getItemAsync(key),
+    setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
+    removeItem: (key: string) => SecureStore.deleteItemAsync(key),
+  };
+}
+
+const SecureStoreAdapter: SupportedStorage = createSessionStorage(Platform.OS);
 
 const { supabaseUrl, supabaseAnonKey } = Constants.expoConfig?.extra ?? {};
 
