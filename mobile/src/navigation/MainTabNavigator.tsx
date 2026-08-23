@@ -2,7 +2,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { DayReviewEditScreen } from '../screens/DayReviewEditScreen';
-import { PlaceholderScreen } from '../screens/PlaceholderScreen';
+import { GroceryListScreen } from '../screens/GroceryListScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { WeekPlanScreen } from '../screens/WeekPlanScreen';
 import type {
@@ -27,15 +27,6 @@ function PlanStackNavigator() {
         options={{ title: 'Review & edit' }}
       />
     </PlanStack.Navigator>
-  );
-}
-
-function GroceryListScreen() {
-  return (
-    <PlaceholderScreen
-      title="Grocery list"
-      note="Auto-generated weekly list lands in a later phase (M5)."
-    />
   );
 }
 

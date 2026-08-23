@@ -13,6 +13,22 @@ jest.mock('../../contexts/ProfileContext', () => ({
   useProfile: () => mockUseProfile(),
 }));
 
+// MP-027/028: the main tab stack now mounts WeekPlanScreen/GroceryListScreen, both of which query
+// Supabase on mount. This suite only cares about *which* navigator tree is mounted, not their data
+// — mock the client so mounting main tabs doesn't fire a real (and here, doomed-to-fail) network
+// call against the fake test URL from jest.setup.js.
+jest.mock('../../lib/supabase', () => ({
+  supabase: {
+    from: () => ({
+      select: () => ({
+        gte: () => ({
+          lte: () => new Promise(() => {}), // never resolves — keeps those screens in "loading"
+        }),
+      }),
+    }),
+  },
+}));
+
 function renderRoot() {
   let tree: ReturnType<typeof create>;
   act(() => {
@@ -42,7 +58,7 @@ describe('RootNavigator state boundary', () => {
     const tree = renderRoot();
 
     expect(textOf(tree)).not.toContain('Meal Planner');
-    expect(textOf(tree)).not.toContain("week's plan");
+    expect(textOf(tree)).not.toContain('week-plan-loading');
   });
 
   it('shows onboarding when signed in but no profile exists yet', () => {
@@ -66,7 +82,7 @@ describe('RootNavigator state boundary', () => {
 
     const tree = renderRoot();
 
-    expect(textOf(tree)).toContain("week's plan");
+    expect(textOf(tree)).toContain('week-plan-loading');
   });
 
   it('waits for the profile check to resolve before picking onboarding vs. main tabs', () => {
@@ -79,6 +95,6 @@ describe('RootNavigator state boundary', () => {
     const tree = renderRoot();
 
     expect(textOf(tree)).not.toContain("Let's set up your plan");
-    expect(textOf(tree)).not.toContain("week's plan");
+    expect(textOf(tree)).not.toContain('week-plan-loading');
   });
 });
