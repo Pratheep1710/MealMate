@@ -20,7 +20,8 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import dns from 'node:dns';
-import { Headers, fetch as undiciFetch } from 'undici';
+import { connect, constants as http2Constants, type IncomingHttpHeaders } from 'node:http2';
+import { Headers, Response } from 'undici';
 
 // GitHub Actions runners sometimes have broken or very slow IPv6 egress — a request to a
 // dual-stack host then hangs waiting on an IPv6 connection attempt instead of falling back to
@@ -52,34 +53,104 @@ const describeLive = hasLiveCreds ? describe : describe.skip;
 // project, which routinely exceeds that from a GitHub Actions runner.
 jest.setTimeout(30000);
 
-// Diagnostic instrumentation (see the commit that added it) proved the hang isn't network/DNS at
-// all: the connection, TLS handshake, and response headers all come back in ~500ms every time —
-// the hang is specifically in consuming the response *body* (res.text()/res.json() never
-// resolves). @supabase/auth-js builds its request `headers` via `new Headers(...)` against
-// whatever the *global* Headers constructor is — which, under jest-expo, is the RN/web polyfill
-// merged in by @react-native/jest-preset's setupFiles, not undici's own. Normalizing every header
-// through undici's own Headers class avoids passing it a foreign-constructor instance, but wasn't
-// the actual fix (kept anyway as harmless defense in depth).
-//
-// The actual root cause, found by comparing this fetch's response headers against a curl request
-// to the identical endpoint (added as a CI diagnostic step): curl's plain request got back a
-// response with NO Content-Encoding header — Cloudflare/Supabase served it uncompressed. fetch()
-// automatically sends `Accept-Encoding: gzip, deflate, br`, so the same endpoint served *this*
-// request `content-encoding: gzip` instead — and undici's automatic gzip decompression is what
-// hangs (confirmed: headers arrive in ~500ms either way, but only the compressed response's body
-// never resolves). Forcing `Accept-Encoding: identity` here matches curl's successful uncompressed
-// path exactly, sidestepping undici's decompression path entirely.
-function timedFetch(
-  input: Parameters<typeof undiciFetch>[0],
-  init: Parameters<typeof undiciFetch>[1] = {},
-) {
+// CI diagnostics isolated the hang to undici's HTTP/1.1 response-body path on GitHub's runner:
+// response headers arrive immediately, but a chunked body never emits even one byte. The same
+// endpoint returns its body immediately over HTTP/2 (curl negotiated h2). Compression was ruled
+// out by a later run: `Accept-Encoding: identity` removed Content-Encoding entirely and the
+// HTTP/1.1 body still hung. This test-only adapter buffers the HTTP/2 response and wraps it in an
+// undici Response, preserving the fetch contract that supabase-js uses. Production React Native
+// continues to use its native fetch implementation; only this Node/Jest live-test transport is
+// replaced.
+async function http2Fetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+  if (url.protocol !== 'https:') {
+    throw new TypeError(`Live Supabase test only supports HTTPS URLs, got ${url.protocol}`);
+  }
+
+  const requestHeaders = new Headers(init.headers);
+  const headers: Record<string, string> = {
+    ':method': init.method ?? 'GET',
+    ':path': `${url.pathname}${url.search}`,
+    ':scheme': 'https',
+    ':authority': url.host,
+  };
+  for (const [name, value] of requestHeaders.entries()) {
+    // HTTP/2 forbids connection-specific headers.
+    if (
+      !['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade'].includes(
+        name,
+      )
+    ) {
+      headers[name] = value;
+    }
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    const session = connect(url.origin);
+    const chunks: Buffer[] = [];
+    let responseHeaders: IncomingHttpHeaders = {};
+    let settled = false;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      init.signal?.removeEventListener('abort', abort);
+      session.close();
+      if (error) reject(error);
+    };
+    const abort = () => {
+      const error = new Error('Supabase live-test request aborted');
+      error.name = 'AbortError';
+      request.close(http2Constants.NGHTTP2_CANCEL);
+      finish(error);
+    };
+
+    const request = session.request(headers);
+    request.on('response', (receivedHeaders) => {
+      responseHeaders = receivedHeaders;
+    });
+    request.on('data', (chunk: Buffer | Uint8Array) => {
+      chunks.push(Buffer.from(chunk));
+    });
+    request.on('end', () => {
+      const status = Number(responseHeaders[':status'] ?? 500);
+      const responseHeaderBag = new Headers();
+      for (const [name, value] of Object.entries(responseHeaders)) {
+        if (name.startsWith(':') || value === undefined) continue;
+        for (const item of Array.isArray(value) ? value : [value]) {
+          responseHeaderBag.append(name, String(item));
+        }
+      }
+      settled = true;
+      init.signal?.removeEventListener('abort', abort);
+      session.close();
+      resolve(new Response(Buffer.concat(chunks), { status, headers: responseHeaderBag }));
+    });
+    request.on('error', (error) => finish(error));
+    session.on('error', (error) => finish(error));
+
+    if (init.signal?.aborted) {
+      abort();
+      return;
+    }
+    init.signal?.addEventListener('abort', abort, { once: true });
+
+    if (init.body == null) {
+      request.end();
+    } else if (typeof init.body === 'string' || init.body instanceof Uint8Array) {
+      request.end(init.body);
+    } else if (init.body instanceof URLSearchParams) {
+      request.end(init.body.toString());
+    } else {
+      request.destroy(new TypeError('Unsupported request body type in Supabase live-test adapter'));
+    }
+  });
+}
+
+function timedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
   const timeoutSignal = AbortSignal.timeout(15000);
-  const signal = init.signal
-    ? AbortSignal.any([init.signal as AbortSignal, timeoutSignal])
-    : timeoutSignal;
-  const headers = new Headers(init.headers as HeadersInit | undefined);
-  headers.set('accept-encoding', 'identity');
-  return undiciFetch(input, { ...init, headers, signal });
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  return http2Fetch(input, { ...init, signal });
 }
 
 function createLiveClient() {
@@ -88,84 +159,26 @@ function createLiveClient() {
   });
 }
 
-// DIAGNOSTIC (temporary): the three tests below have hung for their full timeout budget across
-// several fix attempts (undici fetch, IPv4 DNS preference, a fast per-request abort) with zero
-// change in behavior or timing — meaning whatever's hanging isn't in the network/fetch layer at
-// all (ruled out by reading @supabase/auth-js's source directly: isBrowser() is false here, so
-// storage already falls back to an in-memory adapter, and the legacy lock path never engages
-// since no `lock` option is passed). console.log calls are captured by Jest per-test and printed
-// even when a test times out, so a raw timedFetch call plus explicit timing checkpoints around
-// each operation should show exactly where execution actually stops.
-let diagStart = 0;
-function logStep(label: string) {
-  const now = Date.now();
-  console.log(`[diag] ${label} at +${diagStart ? now - diagStart : 0}ms`);
-  if (!diagStart) diagStart = now;
-}
-
 describeLive('cross-user RLS denial (live Supabase project, mobile client path)', () => {
-  it('DIAGNOSTIC: raw timedFetch to the auth token endpoint', async () => {
-    diagStart = Date.now();
-    logStep('starting raw fetch');
-    const res = await timedFetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-      method: 'POST',
-      headers: { apikey: SUPABASE_ANON_KEY!, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: USER_A_EMAIL, password: USER_A_PASSWORD }),
-    });
-    logStep(`got response, status ${res.status}`);
-    logStep(`headers: ${JSON.stringify([...res.headers.entries()])}`);
-
-    // Manually pump the stream instead of res.text() — this shows whether ANY bytes ever arrive
-    // (a slow trickle vs. a complete dead stop from byte zero) and, via the progress timer, how
-    // long the process is actually stuck for before Jest's timeout cuts it off.
-    const reader = res.body!.getReader();
-    const chunks: Uint8Array[] = [];
-    const progressTimer = setInterval(() => {
-      logStep(`still reading body stream, ${chunks.length} chunk(s) so far`);
-    }, 3000);
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        logStep(`got chunk of ${value.length} bytes`);
-      }
-    } finally {
-      clearInterval(progressTimer);
-    }
-    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-    logStep(`stream done, total ${totalLength} bytes`);
-    expect(res.status).toBe(200);
-  }, 20000);
-
   it("user B cannot read user A's profile row", async () => {
-    diagStart = Date.now();
-    logStep('creating clientA');
     const clientA = createLiveClient();
-    logStep('calling signInWithPassword for A');
     const { data: signInA, error: signInAError } = await clientA.auth.signInWithPassword({
       email: USER_A_EMAIL!,
       password: USER_A_PASSWORD!,
     });
-    logStep('signInWithPassword for A returned');
     expect(signInAError).toBeNull();
     const userAId = signInA.user!.id;
 
-    logStep('creating clientB');
     const clientB = createLiveClient();
-    logStep('calling signInWithPassword for B');
     const { error: signInBError } = await clientB.auth.signInWithPassword({
       email: USER_B_EMAIL!,
       password: USER_B_PASSWORD!,
     });
-    logStep('signInWithPassword for B returned');
     expect(signInBError).toBeNull();
 
     // User B queries user A's row by id directly (not `.eq('id', own id)`) — if RLS were
     // misconfigured this would leak cross-user data instead of coming back empty.
-    logStep('querying user_profiles as B');
     const { data, error } = await clientB.from('user_profiles').select('id').eq('id', userAId);
-    logStep('query returned');
 
     expect(error).toBeNull();
     expect(data).toEqual([]);

@@ -133,35 +133,6 @@ jobs:
             exit 1
           fi
 
-      # DIAGNOSTIC (temporary): rls-cross-user.test.ts's live tests have hung for their full
-      # timeout budget across several fix attempts at the Node/undici level (fetch implementation,
-      # IPv6-vs-IPv4 DNS preference, undici major version, Headers normalization) with zero change
-      # in behavior — response headers arrive in ~500ms every time, but the body never arrives, not
-      # even one byte, however long the timeout is. That pattern surviving multiple unrelated
-      # JS-level fixes points at something below the Node layer — this step settles whether it's a
-      # Node/undici-specific problem or a genuine network/infra issue between this runner and
-      # Supabase, by making the identical request with curl (nothing Node-related in the request
-      # path at all) before Jest ever runs.
-      - name: DIAGNOSTIC - curl the same auth endpoint Jest hangs on
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_TEST_USER_EMAIL: ${{ secrets.SUPABASE_TEST_USER_EMAIL }}
-          SUPABASE_TEST_USER_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_PASSWORD }}
-        run: |
-          # -o /dev/null discards the response body — it contains a real access token for the
-          # test user, which GitHub's log redaction can't mask (it only masks registered secret
-          # values, not ones generated at request time). -w reports what's actually needed here:
-          # status, timing, and byte count, without ever printing the token.
-          curl -v --max-time 20 -o /dev/null \
-            -w "\nHTTP status: %{http_code}\nTotal time: %{time_total}s\nSize downloaded: %{size_download} bytes\n" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"email\":\"$SUPABASE_TEST_USER_EMAIL\",\"password\":\"$SUPABASE_TEST_USER_PASSWORD\"}" \
-            "$SUPABASE_URL/auth/v1/token?grant_type=password"
-          echo "curl exit code: $?"
-
       - name: Jest
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
