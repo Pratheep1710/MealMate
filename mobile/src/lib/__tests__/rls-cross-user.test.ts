@@ -8,8 +8,18 @@
  * provisions one) plus a user_profiles row for each — see docs/MP-023-cross-user-rls-test.md for
  * setup. Skips (not fails) without those env vars, mirroring
  * backend/tests/test_supabase_auth.py's pattern.
+ *
+ * Passes an explicit `fetch` (from `undici`, a devDependency) into every client instead of
+ * relying on the global one: jest-expo's preset merges in @react-native/jest-preset's own
+ * setupFiles, which replace global.fetch with an RN networking shim that has no real bridge to
+ * talk to in a Jest/Node process — it "succeeds" with an empty/undefined response instead of
+ * doing a real HTTP request, which supabase-js then fails to parse as JSON. Confirmed directly:
+ * `await fetch('https://example.com')` under this test environment resolves with
+ * `res.status === undefined`. No per-file Jest config escapes this, since setupFiles from a
+ * preset and from the project's own config both always run.
  */
 import { createClient } from '@supabase/supabase-js';
+import { fetch as undiciFetch } from 'undici';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -29,9 +39,15 @@ const hasLiveCreds = Boolean(
 
 const describeLive = hasLiveCreds ? describe : describe.skip;
 
+function createLiveClient() {
+  return createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
+    global: { fetch: undiciFetch as unknown as typeof fetch },
+  });
+}
+
 describeLive('cross-user RLS denial (live Supabase project, mobile client path)', () => {
   it("user B cannot read user A's profile row", async () => {
-    const clientA = createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
+    const clientA = createLiveClient();
     const { data: signInA, error: signInAError } = await clientA.auth.signInWithPassword({
       email: USER_A_EMAIL!,
       password: USER_A_PASSWORD!,
@@ -39,7 +55,7 @@ describeLive('cross-user RLS denial (live Supabase project, mobile client path)'
     expect(signInAError).toBeNull();
     const userAId = signInA.user!.id;
 
-    const clientB = createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
+    const clientB = createLiveClient();
     const { error: signInBError } = await clientB.auth.signInWithPassword({
       email: USER_B_EMAIL!,
       password: USER_B_PASSWORD!,
@@ -55,14 +71,14 @@ describeLive('cross-user RLS denial (live Supabase project, mobile client path)'
   });
 
   it("user B cannot read user A's meal_plans rows", async () => {
-    const clientA = createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
+    const clientA = createLiveClient();
     const { data: signInA } = await clientA.auth.signInWithPassword({
       email: USER_A_EMAIL!,
       password: USER_A_PASSWORD!,
     });
     const userAId = signInA.user!.id;
 
-    const clientB = createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
+    const clientB = createLiveClient();
     await clientB.auth.signInWithPassword({ email: USER_B_EMAIL!, password: USER_B_PASSWORD! });
 
     const { data, error } = await clientB.from('meal_plans').select('id').eq('user_id', userAId);
@@ -72,7 +88,7 @@ describeLive('cross-user RLS denial (live Supabase project, mobile client path)'
   });
 
   it('user A can read their own profile row (own-data access still succeeds)', async () => {
-    const clientA = createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
+    const clientA = createLiveClient();
     const { data: signInA } = await clientA.auth.signInWithPassword({
       email: USER_A_EMAIL!,
       password: USER_A_PASSWORD!,
