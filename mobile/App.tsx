@@ -1,20 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+import { ProfileProvider } from './src/contexts/ProfileContext';
+import { SessionProvider } from './src/contexts/SessionContext';
+import { RootNavigator } from './src/navigation/RootNavigator';
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Meal Planner — Phase 1 scaffold</Text>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <SessionProvider>
+        <ProfileProvider>
+          <RootNavigator />
+          <StatusBar style="auto" />
+        </ProfileProvider>
+      </SessionProvider>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
