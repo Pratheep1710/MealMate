@@ -27,6 +27,13 @@ class SupabaseConfig(BaseModel):
     url: HttpUrl
     anon_key: str = Field(min_length=1)
     service_role_key: str = Field(min_length=1)
+    # Direct Postgres connection (distinct from the REST/Auth creds above) — same env vars
+    # supabase/apply_migrations.py already reads, now typed here (MP-029) so app/db.py has one
+    # config path rather than a second ad-hoc one. Pooler hosts need db_user="postgres.<ref>".
+    db_host: str = Field(min_length=1)
+    db_port: int = 5432
+    db_user: str = Field(min_length=1, default="postgres")
+    db_password: str = Field(min_length=1)
 
 
 class OpenAIConfig(BaseModel):
@@ -62,6 +69,10 @@ _SUPABASE_ENV = {
     "url": "SUPABASE_URL",
     "anon_key": "SUPABASE_ANON_KEY",
     "service_role_key": "SUPABASE_SERVICE_ROLE_KEY",
+    "db_host": "SUPABASE_DB_HOST",
+    "db_port": "SUPABASE_DB_PORT",
+    "db_user": "SUPABASE_DB_USER",
+    "db_password": "SUPABASE_DB_PASSWORD",
 }
 _OPENAI_ENV = {
     "api_key": "OPENAI_API_KEY",
@@ -82,7 +93,13 @@ def _validate_group[ModelT: BaseModel](
     source: Mapping[str, str | None],
     problems: list[str],
 ) -> ModelT | None:
-    raw = {field: source.get(env_var) for field, env_var in field_map.items()}
+    # Omit unset env vars entirely (rather than passing None) so fields with a non-None default
+    # — e.g. db_port, db_user — fall back to that default instead of failing type validation.
+    raw = {
+        field: value
+        for field, env_var in field_map.items()
+        if (value := source.get(env_var)) is not None
+    }
     try:
         return model.model_validate(raw)
     except ValidationError as exc:

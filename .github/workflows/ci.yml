@@ -22,6 +22,26 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # MP-031's repository integration tests build a throwaway database from the real
+    # supabase/migrations/*.sql (schema + RLS) against this container — see backend/tests/conftest.py.
+    # Without it those tests skip rather than fail, so they'd never actually run in CI.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_TEST_HOST: localhost
+      POSTGRES_TEST_PORT: 5432
+      POSTGRES_TEST_USER: postgres
+      POSTGRES_TEST_PASSWORD: postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
