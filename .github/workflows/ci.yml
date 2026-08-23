@@ -1,0 +1,132 @@
+name: CI
+
+# Runs on every push to every branch (so issues surface before a PR is even raised) and on every
+# PR into main (so the check results show up on the PR itself).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (type-check, lint, test, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: python -m ruff check .
+
+      - name: mypy type-check
+        run: python -m mypy app/
+
+      - name: pytest
+        run: python -m pytest tests/ -v
+
+      - name: pip-audit
+        run: python -m pip_audit -r requirements.txt
+
+  mobile:
+    name: mobile (type-check, lint, format, test, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npx expo lint
+
+      - name: Prettier format check
+        run: npx prettier --check .
+
+      - name: Jest
+        run: npx jest --ci
+
+      - name: npm audit (high+ only)
+        run: npm audit --audit-level=high
+
+  supabase-schema:
+    name: supabase (schema + RLS tests, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supabase/tests
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: supabase/tests/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run schema + RLS tests (pglite — real Postgres semantics, no live DB needed)
+        run: npx vitest run
+
+      - name: npm audit (high+ only)
+        run: npm audit --audit-level=high
+
+  security:
+    name: security (secrets, SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # secret scanning needs full history, not just the latest commit
+
+      - name: Install gitleaks
+        run: |
+          curl -sSL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: gitleaks secret scan
+        run: gitleaks detect --source . --redact -v
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install semgrep
+        run: pip install semgrep
+
+      - name: Semgrep SAST
+        run: semgrep scan --config=p/ci --error

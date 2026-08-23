@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Self
 
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
 
@@ -58,39 +57,41 @@ class AppConfig(BaseModel):
     expo: ExpoConfig
     render: RenderConfig
 
-    @classmethod
-    def load(cls, env: Mapping[str, str] | None = None) -> Self:
-        return load_config(env)
 
-
-_REQUIRED_ENV_VARS = {
-    "supabase": {
-        "url": "SUPABASE_URL",
-        "anon_key": "SUPABASE_ANON_KEY",
-        "service_role_key": "SUPABASE_SERVICE_ROLE_KEY",
-    },
-    "openai": {
-        "api_key": "OPENAI_API_KEY",
-        "model": "OPENAI_MODEL",
-    },
+_SUPABASE_ENV = {
+    "url": "SUPABASE_URL",
+    "anon_key": "SUPABASE_ANON_KEY",
+    "service_role_key": "SUPABASE_SERVICE_ROLE_KEY",
+}
+_OPENAI_ENV = {
+    "api_key": "OPENAI_API_KEY",
+    "model": "OPENAI_MODEL",
+}
+_EXPO_ENV = {
+    "access_token": "EXPO_ACCESS_TOKEN",
+}
+_RENDER_ENV = {
+    "service_id": "RENDER_SERVICE_ID",
+    "git_commit": "RENDER_GIT_COMMIT",
 }
 
-_OPTIONAL_ENV_VARS = {
-    "expo": {
-        "access_token": "EXPO_ACCESS_TOKEN",
-    },
-    "render": {
-        "service_id": "RENDER_SERVICE_ID",
-        "git_commit": "RENDER_GIT_COMMIT",
-    },
-}
 
-_GROUP_MODELS = {
-    "supabase": SupabaseConfig,
-    "openai": OpenAIConfig,
-    "expo": ExpoConfig,
-    "render": RenderConfig,
-}
+def _validate_group[ModelT: BaseModel](
+    model: type[ModelT],
+    field_map: Mapping[str, str],
+    source: Mapping[str, str | None],
+    problems: list[str],
+) -> ModelT | None:
+    raw = {field: source.get(env_var) for field, env_var in field_map.items()}
+    try:
+        return model.model_validate(raw)
+    except ValidationError as exc:
+        for error in exc.errors():
+            field = str(error["loc"][0])
+            env_var = field_map[field]
+            reason = "is missing" if error["type"] == "missing" else error["msg"]
+            problems.append(f"  - {env_var} {reason}")
+        return None
 
 
 def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
@@ -102,31 +103,11 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     """
     source = env if env is not None else os.environ
 
-    groups: dict[str, BaseModel] = {}
     problems: list[str] = []
-
-    for group_name, field_map in _REQUIRED_ENV_VARS.items():
-        raw = {field: source.get(env_var) for field, env_var in field_map.items()}
-        model = _GROUP_MODELS[group_name]
-        try:
-            groups[group_name] = model.model_validate(raw)
-        except ValidationError as exc:
-            for error in exc.errors():
-                field = str(error["loc"][0])
-                env_var = field_map[field]
-                reason = "is missing" if error["type"] == "missing" else error["msg"]
-                problems.append(f"  - {env_var} {reason}")
-
-    for group_name, field_map in _OPTIONAL_ENV_VARS.items():
-        raw = {field: source.get(env_var) for field, env_var in field_map.items()}
-        model = _GROUP_MODELS[group_name]
-        try:
-            groups[group_name] = model.model_validate(raw)
-        except ValidationError as exc:
-            for error in exc.errors():
-                field = str(error["loc"][0])
-                env_var = field_map[field]
-                problems.append(f"  - {env_var} {error['msg']}")
+    supabase = _validate_group(SupabaseConfig, _SUPABASE_ENV, source, problems)
+    openai = _validate_group(OpenAIConfig, _OPENAI_ENV, source, problems)
+    expo = _validate_group(ExpoConfig, _EXPO_ENV, source, problems)
+    render = _validate_group(RenderConfig, _RENDER_ENV, source, problems)
 
     if problems:
         raise ConfigError(
@@ -134,4 +115,8 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
             + "\n".join(problems)
         )
 
-    return AppConfig(**groups)
+    assert supabase is not None
+    assert openai is not None
+    assert expo is not None
+    assert render is not None
+    return AppConfig(supabase=supabase, openai=openai, expo=expo, render=render)
