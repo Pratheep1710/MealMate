@@ -34,6 +34,28 @@ def claim_or_create_job(
     return GenerationJob.model_validate(row)
 
 
+def try_start_processing(
+    conn: psycopg.Connection[DictRow], job_id: uuid.UUID
+) -> GenerationJob | None:
+    """MP-033: atomically transitions a job from 'pending' to 'processing'. Returns the updated
+    row if this call won the transition, or None if the row was already 'processing', 'done', or
+    'failed' — the WHERE clause is the concurrency guarantee: under two near-simultaneous calls for
+    the same job_id, Postgres serializes the two UPDATEs on the row, so at most one can match
+    status = 'pending' and return a row. Callers must only proceed to call the model when this
+    returns non-None.
+    """
+    row = conn.execute(
+        f"""
+        update generation_jobs
+        set status = 'processing'
+        where id = %s and status = 'pending'
+        returning {_COLUMNS}
+        """,
+        (job_id,),
+    ).fetchone()
+    return GenerationJob.model_validate(row) if row else None
+
+
 def get_job(conn: psycopg.Connection[DictRow], job_id: uuid.UUID) -> GenerationJob | None:
     row = conn.execute(
         f"select {_COLUMNS} from generation_jobs where id = %s", (job_id,)

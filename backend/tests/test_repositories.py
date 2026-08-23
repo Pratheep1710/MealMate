@@ -17,6 +17,7 @@ from app.repositories import jobs as jobs_repo
 from app.repositories import notifications as notifications_repo
 from app.repositories import plans as plans_repo
 from app.repositories import profiles as profiles_repo
+from app.services import variety_exclusion as variety_exclusion_service
 
 
 def _insert_dish(
@@ -165,6 +166,55 @@ class TestHistoryRepository:
         assert recent_ids == [variety_dish]
 
 
+class TestVarietyExclusionService:
+    """MP-035: 10-day exclusion set, boundary dates and favorite exemption."""
+
+    def test_exactly_ten_days_ago_is_excluded(self, conn, make_user):
+        user_id = make_user()
+        as_of = datetime.date(2026, 8, 24)
+        dish_id = _insert_dish(conn, name="Ten Days Ago")
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 14), "night")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id)
+
+        exclusion = variety_exclusion_service.get_variety_exclusion_set(conn, user_id, as_of)
+
+        assert dish_id in exclusion
+
+    def test_eleven_days_ago_is_not_excluded(self, conn, make_user):
+        user_id = make_user()
+        as_of = datetime.date(2026, 8, 24)
+        dish_id = _insert_dish(conn, name="Eleven Days Ago")
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 13), "night")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id)
+
+        exclusion = variety_exclusion_service.get_variety_exclusion_set(conn, user_id, as_of)
+
+        assert dish_id not in exclusion
+
+    def test_favorites_are_exempt_even_when_served_recently(self, conn, make_user):
+        user_id = make_user()
+        as_of = datetime.date(2026, 8, 24)
+        favorite_id = _insert_dish(conn, name="Favorite Served Recently")
+        profiles_repo.add_favorite(conn, user_id, favorite_id)
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 20), "night")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", favorite_id)
+
+        exclusion = variety_exclusion_service.get_variety_exclusion_set(conn, user_id, as_of)
+
+        assert favorite_id not in exclusion
+
+    def test_non_favorite_recent_dish_is_still_excluded(self, conn, make_user):
+        user_id = make_user()
+        as_of = datetime.date(2026, 8, 24)
+        dish_id = _insert_dish(conn, name="Not A Favorite")
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 20), "night")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id)
+
+        exclusion = variety_exclusion_service.get_variety_exclusion_set(conn, user_id, as_of)
+
+        assert dish_id in exclusion
+
+
 class TestAvailabilityRepository:
     def test_set_available_ingredients_replaces_the_whole_set(self, conn, make_user):
         user_id = make_user()
@@ -214,6 +264,24 @@ class TestPlansRepository:
 
         plans_repo.remove_plan_item(conn, item.id)
         assert plans_repo.get_plan_items(conn, plan.id) == []
+
+    def test_needs_manual_pick_item_round_trips_with_null_dish_id(self, conn, make_user):
+        user_id = make_user()
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 24), "night")
+
+        conn.execute(
+            """
+            insert into plan_items (plan_id, item_type, dish_id, status)
+            values (%s, %s, null, 'needs_manual_pick')
+            """,
+            (plan.id, "poriyal"),
+        )
+
+        items = plans_repo.get_plan_items(conn, plan.id)
+
+        assert len(items) == 1
+        assert items[0].dish_id is None
+        assert items[0].status == "needs_manual_pick"
 
     def test_get_week_plan_scopes_by_date_range_and_user(self, conn, make_user):
         user_id = make_user()
