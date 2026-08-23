@@ -17,6 +17,10 @@ def get_recent_variety_dish_ids(
 ) -> list[uuid.UUID]:
     """Dish ids the user was served on or after `since`, restricted to `track_variety = true`
     dishes — the exact set the 10-day rule needs to exclude from the next candidate pool.
+
+    Excludes skipped/eating-out days (`meal_plans.is_skipped`, migration 0007): functional spec §6
+    requires a skipped slot to drop out of variety/history tracking entirely, since the dish was
+    never actually eaten.
     """
     rows = conn.execute(
         """
@@ -24,7 +28,10 @@ def get_recent_variety_dish_ids(
         from plan_items pi
         join meal_plans mp on mp.id = pi.plan_id
         join dishes d on d.id = pi.dish_id
-        where mp.user_id = %s and mp.plan_date >= %s and d.track_variety = true
+        where mp.user_id = %s
+          and mp.plan_date >= %s
+          and d.track_variety = true
+          and mp.is_skipped = false
         """,
         (user_id, since),
     ).fetchall()

@@ -17,8 +17,8 @@ from psycopg.types.json import Json
 
 from app.models import GroceryListSnapshot, MealPlan, PlanItem
 
-_PLAN_COLUMNS = "id, user_id, plan_date, slot, created_at"
-_ITEM_COLUMNS = "id, plan_id, item_type, dish_id, make_extra"
+_PLAN_COLUMNS = "id, user_id, plan_date, slot, is_skipped, created_at"
+_ITEM_COLUMNS = "id, plan_id, item_type, dish_id, status, make_extra"
 _SNAPSHOT_COLUMNS = "user_id, week_start, ingredients, created_at"
 
 
@@ -53,6 +53,21 @@ def create_plan_day(
     return MealPlan.model_validate(row)
 
 
+def set_plan_skipped(
+    conn: psycopg.Connection[DictRow], plan_id: uuid.UUID, is_skipped: bool
+) -> MealPlan:
+    """Docs/MP-001's skip/eating-out toggle: drops the day/slot from the grocery list and from
+    variety/history tracking (app/repositories/history.py filters on this column).
+    """
+    row = conn.execute(
+        f"update meal_plans set is_skipped = %s where id = %s returning {_PLAN_COLUMNS}",
+        (is_skipped, plan_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"meal_plans row {plan_id} not found")
+    return MealPlan.model_validate(row)
+
+
 def get_plan_items(conn: psycopg.Connection[DictRow], plan_id: uuid.UUID) -> list[PlanItem]:
     rows = conn.execute(
         f"select {_ITEM_COLUMNS} from plan_items where plan_id = %s", (plan_id,)
@@ -64,18 +79,46 @@ def add_plan_item(
     conn: psycopg.Connection[DictRow],
     plan_id: uuid.UUID,
     item_type: str,
-    dish_id: uuid.UUID,
+    dish_id: uuid.UUID | None,
     make_extra: bool = False,
+    *,
+    status: str = "filled",
 ) -> PlanItem:
+    """`status='needs_manual_pick'` (technical spec §5.1 step 5) is the fallback state for a
+    (day, slot, item_type) with zero eligible candidates even after relaxing the 10-day rule —
+    `dish_id` must be omitted for it, matching the `plan_items_dish_id_required_unless_manual_pick`
+    DB constraint (0007). Resolve it later via `resolve_manual_pick`.
+    """
+    if status == "needs_manual_pick" and dish_id is not None:
+        raise ValueError("needs_manual_pick items must not carry a dish_id")
+    if status == "filled" and dish_id is None:
+        raise ValueError("filled items must carry a dish_id")
     row = conn.execute(
         f"""
-        insert into plan_items (plan_id, item_type, dish_id, make_extra)
-        values (%s, %s, %s, %s)
+        insert into plan_items (plan_id, item_type, dish_id, status, make_extra)
+        values (%s, %s, %s, %s, %s)
         returning {_ITEM_COLUMNS}
         """,
-        (plan_id, item_type, dish_id, make_extra),
+        (plan_id, item_type, dish_id, status, make_extra),
     ).fetchone()
     assert row is not None
+    return PlanItem.model_validate(row)
+
+
+def resolve_manual_pick(
+    conn: psycopg.Connection[DictRow], plan_item_id: uuid.UUID, dish_id: uuid.UUID
+) -> PlanItem:
+    """Moves a `needs_manual_pick` item to `filled` once the user (or a retry) picks a dish."""
+    row = conn.execute(
+        f"""
+        update plan_items set dish_id = %s, status = 'filled'
+        where id = %s
+        returning {_ITEM_COLUMNS}
+        """,
+        (dish_id, plan_item_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"plan_items row {plan_item_id} not found")
     return PlanItem.model_validate(row)
 
 

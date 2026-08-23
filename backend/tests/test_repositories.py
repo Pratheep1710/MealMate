@@ -83,6 +83,34 @@ class TestProfilesRepository:
         profiles_repo.remove_favorite(conn, user_a, dish_id)
         assert profiles_repo.list_favorite_dish_ids(conn, user_a) == []
 
+    def test_planning_mode_is_insert_only_and_ignores_later_changes(self, conn, make_user):
+        """Regression: upsert_profile used to include `planning_mode` in its ON CONFLICT UPDATE
+        SET clause, so any later upsert silently changed it — bypassing functional spec §2's
+        onboarding-only invariant. Migration 0009 enforces this for the `authenticated` role's own
+        column grant, but this backend connection uses a more privileged role that grant doesn't
+        restrict, so the repository itself has to hold the line.
+        """
+        user_id = make_user()
+        onboarding_profile = UserProfile(
+            id=user_id,
+            nonveg_days_per_week=None,
+            nonveg_day_pattern=None,
+            dietary_restrictions=[],
+            dinner_style="rice",
+            planning_mode="suggestion",
+            grocery_day="monday",
+            timezone="Asia/Kolkata",
+        )
+        profiles_repo.upsert_profile(conn, onboarding_profile)
+
+        later_edit = onboarding_profile.model_copy(
+            update={"planning_mode": "reserves", "dinner_style": "tiffin"}
+        )
+        updated = profiles_repo.upsert_profile(conn, later_edit)
+
+        assert updated.planning_mode == "suggestion"
+        assert updated.dinner_style == "tiffin"
+
 
 class TestCatalogRepository:
     def test_get_candidates_filters_by_item_type_and_veg(self, conn):
@@ -164,6 +192,24 @@ class TestHistoryRepository:
 
         assert recent_ids == [variety_dish]
 
+    def test_recent_variety_dishes_excludes_skipped_days(self, conn, make_user):
+        """Regression: a dish attached to a skipped/eating-out day (meal_plans.is_skipped)
+        previously still counted toward the 10-day variety history, even though functional spec
+        §6 requires skipped slots to drop out of variety/history tracking entirely.
+        """
+        user_id = make_user()
+        dish_id = _insert_dish(conn, name="Skipped Day Dish", track_variety=True)
+
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 20), "night")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id)
+        plans_repo.set_plan_skipped(conn, plan.id, True)
+
+        recent_ids = history_repo.get_recent_variety_dish_ids(
+            conn, user_id, datetime.date(2026, 8, 15)
+        )
+
+        assert recent_ids == []
+
 
 class TestAvailabilityRepository:
     def test_set_available_ingredients_replaces_the_whole_set(self, conn, make_user):
@@ -242,6 +288,60 @@ class TestPlansRepository:
         assert fetched is not None
         assert fetched.ingredients == ingredients
 
+    def test_set_plan_skipped_toggles_the_flag(self, conn, make_user):
+        user_id = make_user()
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 24), "night")
+        assert plan.is_skipped is False
+
+        skipped = plans_repo.set_plan_skipped(conn, plan.id, True)
+        assert skipped.is_skipped is True
+
+    def test_add_plan_item_supports_needs_manual_pick_with_no_dish(self, conn, make_user):
+        """Technical spec §5.1 step 5's fallback state: zero eligible candidates even after
+        relaxing the 10-day rule must surface as `needs_manual_pick`, never a blank/invented dish.
+        """
+        user_id = make_user()
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 24), "night")
+
+        item = plans_repo.add_plan_item(
+            conn, plan.id, "poriyal", None, status="needs_manual_pick"
+        )
+
+        assert item.status == "needs_manual_pick"
+        assert item.dish_id is None
+
+    def test_add_plan_item_rejects_needs_manual_pick_with_a_dish(self, conn, make_user):
+        import pytest
+
+        user_id = make_user()
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 24), "night")
+        dish_id = _insert_dish(conn, name="Dish")
+
+        with pytest.raises(ValueError):
+            plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id, status="needs_manual_pick")
+
+    def test_add_plan_item_rejects_filled_without_a_dish(self, conn, make_user):
+        import pytest
+
+        user_id = make_user()
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 24), "night")
+
+        with pytest.raises(ValueError):
+            plans_repo.add_plan_item(conn, plan.id, "poriyal", None)
+
+    def test_resolve_manual_pick_fills_in_a_dish(self, conn, make_user):
+        user_id = make_user()
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 24), "night")
+        item = plans_repo.add_plan_item(
+            conn, plan.id, "poriyal", None, status="needs_manual_pick"
+        )
+        dish_id = _insert_dish(conn, name="Chosen Dish")
+
+        resolved = plans_repo.resolve_manual_pick(conn, item.id, dish_id)
+
+        assert resolved.status == "filled"
+        assert resolved.dish_id == dish_id
+
     def test_grocery_snapshot_write_is_idempotent_per_week(self, conn, make_user):
         user_id = make_user()
         week_start = datetime.date(2026, 8, 24)
@@ -308,6 +408,25 @@ class TestNotificationsRepository:
         assert updated.status == "sent"
         assert updated.expo_ticket_id == "ticket-123"
         assert updated.attempt == 1
+        assert updated.delivered_at is None
+
+    def test_mark_status_sets_delivered_at_only_on_the_delivered_transition(
+        self, conn, make_user
+    ):
+        """Regression: migration 0008 added delivered_at specifically because updated_at doesn't
+        change on UPDATE without a trigger, so mark_status must set it explicitly and atomically
+        with the status transition (docs/MP-005) — not on every status change, only 'delivered'.
+        """
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+
+        sent = notifications_repo.mark_status(conn, notification.id, "sent")
+        assert sent.delivered_at is None
+
+        delivered = notifications_repo.mark_status(conn, notification.id, "delivered")
+        assert delivered.delivered_at is not None
 
     def test_list_for_target_date_scopes_by_type_and_date(self, conn, make_user):
         user_id = make_user()

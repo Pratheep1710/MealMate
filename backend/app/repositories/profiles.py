@@ -23,6 +23,14 @@ def get_profile(conn: psycopg.Connection[DictRow], user_id: uuid.UUID) -> UserPr
 
 
 def upsert_profile(conn: psycopg.Connection[DictRow], profile: UserProfile) -> UserProfile:
+    """`planning_mode` is deliberately insert-only: it's set from `profile.planning_mode` on the
+    first (onboarding) insert, but the `on conflict` branch omits it from the update list, so a
+    later call with a different `planning_mode` is silently ignored rather than applied. Migration
+    0009 enforces the same onboarding-only invariant at the DB layer, but only against the
+    `authenticated` Postgres role's own column grant — this backend connection uses a more
+    privileged role that grant doesn't restrict, so the invariant has to be enforced here too, not
+    just at the RLS/grant layer (functional spec §2: planning_mode is immutable after onboarding).
+    """
     row = conn.execute(
         f"""
         insert into user_profiles
@@ -34,7 +42,6 @@ def upsert_profile(conn: psycopg.Connection[DictRow], profile: UserProfile) -> U
             nonveg_day_pattern = excluded.nonveg_day_pattern,
             dietary_restrictions = excluded.dietary_restrictions,
             dinner_style = excluded.dinner_style,
-            planning_mode = excluded.planning_mode,
             grocery_day = excluded.grocery_day,
             timezone = excluded.timezone
         returning {_COLUMNS}

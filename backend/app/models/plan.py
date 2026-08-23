@@ -13,6 +13,7 @@ class MealPlan(BaseModel):
     user_id: uuid.UUID
     plan_date: datetime.date
     slot: str
+    is_skipped: bool
     created_at: datetime.datetime
 
 
@@ -20,5 +21,6 @@ class PlanItem(BaseModel):
     id: uuid.UUID
     plan_id: uuid.UUID
     item_type: str
-    dish_id: uuid.UUID
+    dish_id: uuid.UUID | None
+    status: str
     make_extra: bool

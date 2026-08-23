@@ -33,14 +33,20 @@ def compute_daily_reminder_slo(
 ) -> SloResult:
     """MP-005 measurement rule.
 
-    Numerator: rows with status == 'delivered' and `updated_at` within 10 minutes of
-    `cron_fire_time`. Denominator: every row passed in (all daily_reminder rows created for that
-    cron run, per MP-005 — `failed` and stuck `pending`/`sent` rows count against the numerator by
-    construction, since they only enter it via the 'delivered' + in-window check above).
+    Numerator: rows with status == 'delivered' and `delivered_at` (set atomically on the delivered
+    transition — see app/repositories/notifications.py's mark_status, and migration 0008's fix for
+    the `updated_at`-doesn't-update-on-UPDATE-without-a-trigger bug) falling in
+    `[cron_fire_time, cron_fire_time + 10min]`. One-sided, not `abs(...)`: a delivery timestamped
+    *before* the cron fire would be a clock-skew or data bug, not evidence of an on-time delivery,
+    so it must not count toward the numerator. Denominator: every row passed in (all daily_reminder
+    rows created for that cron run, per MP-005 — `failed` and stuck `pending`/`sent` rows count
+    against the numerator by construction, since they only enter it via the checks above).
     """
     delivered = sum(
         1
         for n in notifications
-        if n.status == "delivered" and abs(n.updated_at - cron_fire_time) <= _WINDOW
+        if n.status == "delivered"
+        and n.delivered_at is not None
+        and cron_fire_time <= n.delivered_at <= cron_fire_time + _WINDOW
     )
     return SloResult(delivered_in_window=delivered, total=len(notifications))

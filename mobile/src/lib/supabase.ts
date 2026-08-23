@@ -5,37 +5,36 @@ import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
-// MP-023: session tokens must never sit in plaintext storage. expo-secure-store is backed by the
-// iOS Keychain / Android Keystore, not AsyncStorage — this adapter is the only place session data
-// touches disk on native, so there is exactly one path to audit for that guarantee.
+// MP-023 AC: session tokens must never sit in plaintext storage. expo-secure-store is backed by
+// the iOS Keychain / Android Keystore, not AsyncStorage — this adapter is the only place session
+// data touches disk on native, so there is exactly one path to audit for that guarantee.
 //
 // expo-secure-store has no web implementation (it throws — there's no Keychain/Keystore
-// equivalent in a browser), so on web this falls back to localStorage instead. That's the
-// standard Expo pattern for this gap, not a security regression for v1: the app's real distribution
-// target is native (iOS/Android, per docs/MP-001's scope), and the browser's storage isolation
-// model is a different (same-origin, not cross-app) threat model than the one SecureStore guards
-// against on native. Without this branch the web build never leaves its loading spinner — see the
-// caught TypeError from SecureStore.getItemAsync during session recovery (found by actually
-// running `expo start --web` and driving it in a browser, not by any unit test).
+// equivalent in a browser). The first fix for that (localStorage) was wrong: localStorage is
+// plaintext, readable by any same-origin script (including an injected XSS payload), and MP-023's
+// AC has no web carve-out — "no plaintext token storage" applies everywhere this code runs, not
+// just on native. Web isn't the real distribution target anyway (native iOS/Android, per
+// docs/MP-001's scope) — it exists here for local dev/smoke-testing (see `run` skill usage), which
+// doesn't need a session to survive a page refresh. So web uses a non-persistent, in-memory store
+// instead: sign-in works for the life of the tab, nothing ever touches disk, and there's no token
+// to steal via a stored-value read. Without *some* working storage adapter the web build never
+// leaves its loading spinner — see the caught TypeError from SecureStore.getItemAsync during
+// session recovery (found by actually running `expo start --web` and driving it in a browser).
 //
 // Takes `platformOS` as a parameter (rather than reading Platform.OS internally) so the branch is
 // testable as a plain function — jest-expo's test environment doesn't simulate the web platform
 // well enough to mock Platform.OS itself reliably.
 export function createSessionStorage(platformOS: string): SupportedStorage {
   if (platformOS === 'web') {
+    const memory = new Map<string, string>();
     return {
-      getItem: (key: string) =>
-        Promise.resolve(typeof localStorage === 'undefined' ? null : localStorage.getItem(key)),
+      getItem: (key: string) => Promise.resolve(memory.has(key) ? memory.get(key)! : null),
       setItem: (key: string, value: string) => {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem(key, value);
-        }
+        memory.set(key, value);
         return Promise.resolve();
       },
       removeItem: (key: string) => {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.removeItem(key);
-        }
+        memory.delete(key);
         return Promise.resolve();
       },
     };

@@ -14,7 +14,7 @@ from app.models import NotificationLog
 
 _COLUMNS = (
     "id, user_id, notification_type, target_date, status, expo_ticket_id, attempt, "
-    "created_at, updated_at"
+    "created_at, updated_at, delivered_at"
 )
 
 
@@ -52,11 +52,12 @@ def mark_status(
         set status = %s,
             expo_ticket_id = coalesce(%s, expo_ticket_id),
             attempt = attempt + %s,
-            updated_at = now()
+            updated_at = now(),
+            delivered_at = case when %s = 'delivered' then now() else delivered_at end
         where id = %s
         returning {_COLUMNS}
         """,
-        (status, expo_ticket_id, 1 if increment_attempt else 0, notification_id),
+        (status, expo_ticket_id, 1 if increment_attempt else 0, status, notification_id),
     ).fetchone()
     if row is None:
         raise ValueError(f"notification_log row {notification_id} not found")
