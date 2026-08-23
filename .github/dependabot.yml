@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      backend-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      mobile-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /supabase/tests
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      supabase-test-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
