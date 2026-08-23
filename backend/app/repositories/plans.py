@@ -18,7 +18,7 @@ from psycopg.types.json import Json
 from app.models import GroceryListSnapshot, MealPlan, PlanItem
 
 _PLAN_COLUMNS = "id, user_id, plan_date, slot, created_at"
-_ITEM_COLUMNS = "id, plan_id, item_type, dish_id, make_extra"
+_ITEM_COLUMNS = "id, plan_id, item_type, dish_id, make_extra, status"
 _SNAPSHOT_COLUMNS = "user_id, week_start, ingredients, created_at"
 
 

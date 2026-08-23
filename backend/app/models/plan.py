@@ -20,5 +20,6 @@ class PlanItem(BaseModel):
     id: uuid.UUID
     plan_id: uuid.UUID
     item_type: str
-    dish_id: uuid.UUID
+    dish_id: uuid.UUID | None
     make_extra: bool
+    status: str
