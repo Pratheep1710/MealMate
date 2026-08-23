@@ -39,6 +39,11 @@ const hasLiveCreds = Boolean(
 
 const describeLive = hasLiveCreds ? describe : describe.skip;
 
+// Jest's default 5s per-test timeout is tuned for mocked/local work — these tests make 2-3 real
+// network round-trips each (sign in as A, sign in as B, then a query) against a live Supabase
+// project, which routinely exceeds that from a GitHub Actions runner.
+jest.setTimeout(30000);
+
 function createLiveClient() {
   return createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
     global: { fetch: undiciFetch as unknown as typeof fetch },
