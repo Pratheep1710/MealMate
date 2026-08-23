@@ -19,7 +19,15 @@
  * preset and from the project's own config both always run.
  */
 import { createClient } from '@supabase/supabase-js';
+import dns from 'node:dns';
 import { fetch as undiciFetch } from 'undici';
+
+// GitHub Actions runners sometimes have broken or very slow IPv6 egress — a request to a
+// dual-stack host then hangs waiting on an IPv6 connection attempt instead of falling back to
+// IPv4 quickly, which looks identical to a dead network from the test's side (this project has
+// hit the same class of IPv6-only-host issue before — see supabase/apply_migrations.py's
+// docstring). Preferring IPv4 resolution avoids the hang outright.
+dns.setDefaultResultOrder('ipv4first');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -44,9 +52,24 @@ const describeLive = hasLiveCreds ? describe : describe.skip;
 // project, which routinely exceeds that from a GitHub Actions runner.
 jest.setTimeout(30000);
 
+// A 15s-per-request timeout, well under Jest's 30s per-test budget — if the IPv4-preference fix
+// above doesn't turn out to be the whole story, this turns the next failure into a clear
+// "aborted" error at a predictable point instead of another opaque "Exceeded timeout" with no
+// indication of where the hang actually happened.
+function timedFetch(
+  input: Parameters<typeof undiciFetch>[0],
+  init: Parameters<typeof undiciFetch>[1] = {},
+) {
+  const timeoutSignal = AbortSignal.timeout(15000);
+  const signal = init.signal
+    ? AbortSignal.any([init.signal as AbortSignal, timeoutSignal])
+    : timeoutSignal;
+  return undiciFetch(input, { ...init, signal });
+}
+
 function createLiveClient() {
   return createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
-    global: { fetch: undiciFetch as unknown as typeof fetch },
+    global: { fetch: timedFetch as unknown as typeof fetch },
   });
 }
 
