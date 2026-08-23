@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node / Expo
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Env / secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
