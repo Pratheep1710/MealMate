@@ -20,7 +20,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import dns from 'node:dns';
-import { fetch as undiciFetch } from 'undici';
+import { Headers, fetch as undiciFetch } from 'undici';
 
 // GitHub Actions runners sometimes have broken or very slow IPv6 egress — a request to a
 // dual-stack host then hangs waiting on an IPv6 connection attempt instead of falling back to
@@ -52,10 +52,17 @@ const describeLive = hasLiveCreds ? describe : describe.skip;
 // project, which routinely exceeds that from a GitHub Actions runner.
 jest.setTimeout(30000);
 
-// A 15s-per-request timeout, well under Jest's 30s per-test budget — if the IPv4-preference fix
-// above doesn't turn out to be the whole story, this turns the next failure into a clear
-// "aborted" error at a predictable point instead of another opaque "Exceeded timeout" with no
-// indication of where the hang actually happened.
+// Diagnostic instrumentation (see the commit that added it) proved the hang isn't network/DNS at
+// all: the connection, TLS handshake, and response headers all come back in ~500ms every time —
+// the hang is specifically in consuming the response *body* (res.text()/res.json() never
+// resolves). @supabase/auth-js builds its request `headers` via `new Headers(...)` against
+// whatever the *global* Headers constructor is — which, under jest-expo, is the RN/web polyfill
+// merged in by @react-native/jest-preset's setupFiles, not undici's own. Passing that
+// foreign-constructor Headers instance into undici's fetch (which is strict about the shape of
+// its inputs internally) is a known way to break its response body stream handling. Normalizing
+// every header through undici's *own* Headers class before the request goes out avoids that
+// mismatch — this is the actual fix; the timeout below is now just a safety net, not the
+// diagnostic tool it was before.
 function timedFetch(
   input: Parameters<typeof undiciFetch>[0],
   init: Parameters<typeof undiciFetch>[1] = {},
@@ -64,7 +71,8 @@ function timedFetch(
   const signal = init.signal
     ? AbortSignal.any([init.signal as AbortSignal, timeoutSignal])
     : timeoutSignal;
-  return undiciFetch(input, { ...init, signal });
+  const headers = new Headers(init.headers as HeadersInit | undefined);
+  return undiciFetch(input, { ...init, headers, signal });
 }
 
 function createLiveClient() {
