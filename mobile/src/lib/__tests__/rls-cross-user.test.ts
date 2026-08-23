@@ -73,26 +73,64 @@ function createLiveClient() {
   });
 }
 
+// DIAGNOSTIC (temporary): the three tests below have hung for their full timeout budget across
+// several fix attempts (undici fetch, IPv4 DNS preference, a fast per-request abort) with zero
+// change in behavior or timing — meaning whatever's hanging isn't in the network/fetch layer at
+// all (ruled out by reading @supabase/auth-js's source directly: isBrowser() is false here, so
+// storage already falls back to an in-memory adapter, and the legacy lock path never engages
+// since no `lock` option is passed). console.log calls are captured by Jest per-test and printed
+// even when a test times out, so a raw timedFetch call plus explicit timing checkpoints around
+// each operation should show exactly where execution actually stops.
+let diagStart = 0;
+function logStep(label: string) {
+  const now = Date.now();
+  console.log(`[diag] ${label} at +${diagStart ? now - diagStart : 0}ms`);
+  if (!diagStart) diagStart = now;
+}
+
 describeLive('cross-user RLS denial (live Supabase project, mobile client path)', () => {
+  it('DIAGNOSTIC: raw timedFetch to the auth token endpoint', async () => {
+    diagStart = Date.now();
+    logStep('starting raw fetch');
+    const res = await timedFetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_ANON_KEY!, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: USER_A_EMAIL, password: USER_A_PASSWORD }),
+    });
+    logStep(`got response, status ${res.status}`);
+    const text = await res.text();
+    logStep(`got body, length ${text.length}`);
+    expect(res.status).toBe(200);
+  }, 20000);
+
   it("user B cannot read user A's profile row", async () => {
+    diagStart = Date.now();
+    logStep('creating clientA');
     const clientA = createLiveClient();
+    logStep('calling signInWithPassword for A');
     const { data: signInA, error: signInAError } = await clientA.auth.signInWithPassword({
       email: USER_A_EMAIL!,
       password: USER_A_PASSWORD!,
     });
+    logStep('signInWithPassword for A returned');
     expect(signInAError).toBeNull();
     const userAId = signInA.user!.id;
 
+    logStep('creating clientB');
     const clientB = createLiveClient();
+    logStep('calling signInWithPassword for B');
     const { error: signInBError } = await clientB.auth.signInWithPassword({
       email: USER_B_EMAIL!,
       password: USER_B_PASSWORD!,
     });
+    logStep('signInWithPassword for B returned');
     expect(signInBError).toBeNull();
 
     // User B queries user A's row by id directly (not `.eq('id', own id)`) — if RLS were
     // misconfigured this would leak cross-user data instead of coming back empty.
+    logStep('querying user_profiles as B');
     const { data, error } = await clientB.from('user_profiles').select('id').eq('id', userAId);
+    logStep('query returned');
 
     expect(error).toBeNull();
     expect(data).toEqual([]);
