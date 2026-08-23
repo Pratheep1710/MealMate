@@ -64,8 +64,11 @@ def _seed_profile(client: httpx.Client, user_id: str) -> None:
 
 
 def main() -> int:
-    url = os.environ.get("SUPABASE_URL")
-    service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    # .strip() guards against a stray trailing newline/whitespace from copy-pasting a long key
+    # into a terminal (e.g. PowerShell splitting a paste across lines) — that would otherwise
+    # surface as an opaque "Illegal header value" exception deep in httpx instead of a clear error.
+    url = (os.environ.get("SUPABASE_URL") or "").strip()
+    service_role_key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
     if not url or not service_role_key:
         print("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set.", file=sys.stderr)
         return 1
