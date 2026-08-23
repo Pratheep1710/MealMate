@@ -75,6 +75,31 @@ describe('user_profiles', () => {
       db.query(`insert into user_profiles (id, grocery_day) values ($1, 'monday')`, [USER_A])
     ).rejects.toThrow();
   });
+
+  it('review fix: a user cannot change their own planning_mode, even on their own row (functional spec §2 — immutable after onboarding)', async () => {
+    await asUser(db, USER_A);
+    await expect(
+      db.query(`update user_profiles set planning_mode = 'reserves' where id = $1`, [USER_A])
+    ).rejects.toThrow();
+
+    // the column-level revoke must not have taken down updates to columns that ARE allowed
+    await db.query(`update user_profiles set dinner_style = 'tiffin' where id = $1`, [USER_A]);
+    const check = await db.query(`select dinner_style, planning_mode from user_profiles where id = $1`, [
+      USER_A,
+    ]);
+    expect(check.rows[0].dinner_style).toBe('tiffin');
+    expect(check.rows[0].planning_mode).toBe('suggestion'); // unchanged
+
+    // a single statement touching one disallowed column must reject as a whole, not partially apply
+    await expect(
+      db.query(
+        `update user_profiles set dinner_style = 'rice', planning_mode = 'reserves' where id = $1`,
+        [USER_A]
+      )
+    ).rejects.toThrow();
+    const afterMixed = await db.query(`select dinner_style from user_profiles where id = $1`, [USER_A]);
+    expect(afterMixed.rows[0].dinner_style).toBe('tiffin'); // the rice change did not apply either
+  });
 });
 
 describe('user_favorite_dishes', () => {

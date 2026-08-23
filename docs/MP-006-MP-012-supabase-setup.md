@@ -64,17 +64,24 @@ against the actual hosted project once step 2 is done, the same 21 assertions ca
 over `@supabase/supabase-js` against the live URL — not built here since the pglite suite already
 gives an equivalent, faster-running, CI-friendly guarantee without needing live credentials.
 
-## Status (updated after the live project was provisioned)
+## Status (updated after PR #1 review fixes)
 
 | Task | Status |
 |---|---|
 | MP-006 (project) | **Done.** Project `kuctkvxegfaqemosmtcs` (region ap-southeast-2) is live and reachable. |
-| MP-007–011 (schema) | **Done.** All 6 migration files applied to the live project via `supabase/apply_migrations.py` (through the session pooler — the direct `db.*.supabase.co` host is IPv6-only and unreachable from this network). All 12 tables confirmed present. |
-| MP-013 (RLS) | **Done.** All 12 tables have RLS enabled with the expected policy counts, verified live. A REST probe with the anon/publishable key against `dishes` correctly returned `permission denied` (Postgres role `anon` has no grants — only `authenticated` does, per design) — that's the RLS working as intended, not a bug. |
+| MP-007–011 (schema) | **Done.** 11 migration files applied to the live project via `supabase/apply_migrations.py` (through the session pooler — the direct `db.*.supabase.co` host is IPv6-only and unreachable from this network). All 12 tables confirmed present, including the PR #1 review-fix columns (`plan_items.status`, `meal_plans.is_skipped`, `notification_log.delivered_at`, `dish_ingredients.quantity`/`unit`). |
+| MP-013 (RLS) | **Done.** All 12 tables have RLS enabled with the expected policy counts, verified live — including the `planning_mode` column-level protection added in review fix `0009`, confirmed against a real signed-in session: `dinner_style` updates succeed (200), `planning_mode` updates are rejected (403 permission denied). |
 | MP-014 (config) | **Done.** `backend/.env` has real `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY` filled in. `OPENAI_MODEL` is still blank — config correctly fails fast until you pick a model name. |
-| MP-012 (auth) | Auth (GoTrue) confirmed live at `/auth/v1/health`. The sign-in test still skips until you create a confirmed test user and set `SUPABASE_TEST_USER_EMAIL`/`SUPABASE_TEST_USER_PASSWORD` in `backend/.env` — see section 3. |
+| MP-012 (auth) | **Done.** A CI test user (`ci-test-user@mealmate.test`) was provisioned via the Admin API using the service_role key — no need to hand-create one in the dashboard. The live sign-in/JWT test passes locally and now runs for real in CI (not skipped) via repo secrets `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_TEST_USER_EMAIL`/`SUPABASE_TEST_USER_PASSWORD`. |
 
-`supabase/apply_migrations.py` is a one-time apply script, not a migration framework — it has no
-applied-state tracking, so re-running it against this project will fail loudly on the first
-`create table` (expected, not a bug). Keep that in mind if the schema needs to change later: write
-a new numbered migration file rather than re-running the existing ones.
+`supabase/apply_migrations.py` now tracks applied migrations in `_migrations.history` (filename +
+checksum + timestamp) and applies each run's pending files inside a single transaction — a mid-batch
+failure rolls back the whole batch instead of leaving partial state, and reruns skip anything
+already recorded. See the script's own docstring for `--mark-applied` (backfilling history for
+migrations applied before this tracking existed — used once, for `0001`–`0006`).
+
+**Self-discovered while verifying the `planning_mode` fix, not a reviewer comment**: `service_role`
+had `BYPASSRLS` but zero table grants — every scheduled job (generation, notifications, ETL) would
+have failed against this project. Fixed in `0010`. The test harness had the same blind spot
+(`asServiceRole` reset to the pglite superuser instead of actually switching to the `service_role`
+role, so it could never have caught this) — fixed in `supabase/tests/helpers.mjs` alongside it.

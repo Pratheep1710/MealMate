@@ -1,4 +1,9 @@
-# MP-001 — v1 Scope Baseline (Approved Draft)
+# MP-001 — v1 Scope Baseline
+
+**Status: pending explicit product-owner confirmation — not yet frozen.** ("Approved Draft" was
+sloppy wording — a status can't be both; PR #1 review flagged this correctly. This document and
+MP-002–005 are Claude's proposal with recorded rationale, not a self-approved decision. See PR #1
+for the confirmation this needs before MP-006 onward should treat any of it as settled.)
 
 Source of truth: `version1_mealPlanner_functionalities.md` + `version1_mealPlanner_technical.md`.
 This freezes the v1 feature boundary per MP-001's acceptance criteria. It restates decisions already

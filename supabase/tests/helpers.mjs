@@ -12,7 +12,7 @@ const migrationsDir = path.resolve(__dirname, '..', 'migrations');
 const AUTH_STUB_SQL = `
   create role authenticated;
   create role anon;
-  create role service_role;
+  create role service_role bypassrls;
 
   create schema auth;
   create table auth.users (
@@ -63,7 +63,11 @@ export async function asAnon(db) {
 }
 
 export async function asServiceRole(db) {
-  await db.exec('reset role;');
+  // Actually switches to the service_role Postgres role (not just resetting to the pglite
+  // superuser) so tests exercise its real privileges — catching gaps like the one this comment
+  // replaces: service_role had BYPASSRLS but no table grants at all (see migration 0010), which
+  // a superuser stand-in could never have surfaced since a superuser bypasses grants too.
+  await db.exec('set role service_role;');
 }
 
 export async function reset(db) {
