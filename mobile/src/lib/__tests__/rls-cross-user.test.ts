@@ -106,8 +106,28 @@ describeLive('cross-user RLS denial (live Supabase project, mobile client path)'
       body: JSON.stringify({ email: USER_A_EMAIL, password: USER_A_PASSWORD }),
     });
     logStep(`got response, status ${res.status}`);
-    const text = await res.text();
-    logStep(`got body, length ${text.length}`);
+    logStep(`headers: ${JSON.stringify([...res.headers.entries()])}`);
+
+    // Manually pump the stream instead of res.text() — this shows whether ANY bytes ever arrive
+    // (a slow trickle vs. a complete dead stop from byte zero) and, via the progress timer, how
+    // long the process is actually stuck for before Jest's timeout cuts it off.
+    const reader = res.body!.getReader();
+    const chunks: Uint8Array[] = [];
+    const progressTimer = setInterval(() => {
+      logStep(`still reading body stream, ${chunks.length} chunk(s) so far`);
+    }, 3000);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        logStep(`got chunk of ${value.length} bytes`);
+      }
+    } finally {
+      clearInterval(progressTimer);
+    }
+    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+    logStep(`stream done, total ${totalLength} bytes`);
     expect(res.status).toBe(200);
   }, 20000);
 
