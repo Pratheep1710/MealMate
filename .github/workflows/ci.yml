@@ -22,6 +22,26 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # MP-031's repository integration tests build a throwaway database from the real
+    # supabase/migrations/*.sql (schema + RLS) against this container — see backend/tests/conftest.py.
+    # Without it those tests skip rather than fail, so they'd never actually run in CI.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_TEST_HOST: localhost
+      POSTGRES_TEST_PORT: 5432
+      POSTGRES_TEST_USER: postgres
+      POSTGRES_TEST_PASSWORD: postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -82,7 +102,45 @@ jobs:
       - name: Prettier format check
         run: npx prettier --check .
 
+      # MP-023's cross-user RLS test (rls-cross-user.test.ts) needs a live Supabase project plus
+      # TWO confirmed test users, or it skips instead of asserting anything — see
+      # backend/scripts/provision_ci_test_users.py and docs/MP-023-cross-user-rls-test.md. Same-repo
+      # runs (push, or a same-repo PR — this project takes no external fork PRs) must fail loudly
+      # here rather than let that test quietly skip forever; a fork PR run has no repo secrets by
+      # GitHub's own design and is exempt.
+      - name: Verify live RLS test credentials are configured
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_TEST_USER_EMAIL: ${{ secrets.SUPABASE_TEST_USER_EMAIL }}
+          SUPABASE_TEST_USER_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_PASSWORD }}
+          SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
+          SUPABASE_TEST_USER_B_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
+        run: |
+          missing=()
+          for var in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_TEST_USER_EMAIL \
+                      SUPABASE_TEST_USER_PASSWORD SUPABASE_TEST_USER_B_EMAIL \
+                      SUPABASE_TEST_USER_B_PASSWORD; do
+            if [ -z "${!var}" ]; then
+              missing+=("$var")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::MP-023's live cross-user RLS test cannot run — missing repo secrets: ${missing[*]}"
+            echo "Run backend/scripts/provision_ci_test_users.py to provision the two test users," \
+                 "then add the printed values as repo secrets. See docs/MP-023-cross-user-rls-test.md."
+            exit 1
+          fi
+
       - name: Jest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_TEST_USER_EMAIL: ${{ secrets.SUPABASE_TEST_USER_EMAIL }}
+          SUPABASE_TEST_USER_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_PASSWORD }}
+          SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
+          SUPABASE_TEST_USER_B_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
         run: npx jest --ci
 
       - name: npm audit (high+ only)

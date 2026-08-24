@@ -6,6 +6,8 @@ VALID_ENV = {
     "SUPABASE_URL": "https://example.supabase.co",
     "SUPABASE_ANON_KEY": "anon-key-value",
     "SUPABASE_SERVICE_ROLE_KEY": "service-role-key-value",
+    "SUPABASE_DB_HOST": "db.example.supabase.co",
+    "SUPABASE_DB_PASSWORD": "db-password-value",
     "OPENAI_API_KEY": "sk-test-value",
     "OPENAI_MODEL": "gpt-test-model",
 }
@@ -15,6 +17,9 @@ def test_valid_config_loads():
     config = load_config(VALID_ENV)
     assert str(config.supabase.url) == "https://example.supabase.co/"
     assert config.supabase.anon_key == "anon-key-value"
+    assert config.supabase.db_host == "db.example.supabase.co"
+    assert config.supabase.db_port == 5432
+    assert config.supabase.db_user == "postgres"
     assert config.openai.model == "gpt-test-model"
     assert config.expo.access_token is None
     assert config.render.is_render is False
@@ -23,11 +28,15 @@ def test_valid_config_loads():
 def test_valid_config_with_optional_fields_set():
     env = {
         **VALID_ENV,
+        "SUPABASE_DB_PORT": "6543",
+        "SUPABASE_DB_USER": "postgres.myproject",
         "EXPO_ACCESS_TOKEN": "expo-token",
         "RENDER_SERVICE_ID": "srv-123",
         "RENDER_GIT_COMMIT": "abc123",
     }
     config = load_config(env)
+    assert config.supabase.db_port == 6543
+    assert config.supabase.db_user == "postgres.myproject"
     assert config.expo.access_token == "expo-token"
     assert config.render.service_id == "srv-123"
     assert config.render.is_render is True
@@ -39,6 +48,8 @@ def test_valid_config_with_optional_fields_set():
         ("SUPABASE_URL", "SUPABASE_URL"),
         ("SUPABASE_ANON_KEY", "SUPABASE_ANON_KEY"),
         ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
+        ("SUPABASE_DB_HOST", "SUPABASE_DB_HOST"),
+        ("SUPABASE_DB_PASSWORD", "SUPABASE_DB_PASSWORD"),
         ("OPENAI_API_KEY", "OPENAI_API_KEY"),
         ("OPENAI_MODEL", "OPENAI_MODEL"),
     ],
@@ -58,6 +69,8 @@ def test_all_required_fields_missing_reports_every_problem_at_once():
         "SUPABASE_URL",
         "SUPABASE_ANON_KEY",
         "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_DB_HOST",
+        "SUPABASE_DB_PASSWORD",
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
     ]:
@@ -78,3 +91,4 @@ def test_error_message_never_contains_secret_values():
     message = str(exc_info.value)
     assert "sk-test-value" not in message
     assert VALID_ENV["SUPABASE_SERVICE_ROLE_KEY"] not in message
+    assert VALID_ENV["SUPABASE_DB_PASSWORD"] not in message
