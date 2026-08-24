@@ -11,17 +11,24 @@ here that skips redact().
 from __future__ import annotations
 
 import contextvars
+import dataclasses
 import datetime
 import json
 import logging
 import sys
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, TextIO
 
+from pydantic import BaseModel
+
 # Key-name substrings that force full redaction regardless of value. Deliberately broad — a
 # false-positive redaction (a harmless field named "token_count" getting scrubbed) is cheap;
-# a missed secret or a leaked prompt/PII field is not.
+# a missed secret or a leaked prompt/PII field is not. Includes generic payload-shaped names
+# ("content", "message", "context", "payload", "body") so a *short* prompt/user-context string
+# under one of those keys is fully redacted too, not just long ones — length alone isn't a
+# reliable signal (a short prompt is still a prompt).
 _SENSITIVE_KEY_MARKERS: Sequence[str] = (
     "key",
     "token",
@@ -32,13 +39,34 @@ _SENSITIVE_KEY_MARKERS: Sequence[str] = (
     "prompt",
     "email",
     "phone",
+    "content",
+    "message",
+    "context",
+    "payload",
+    "body",
 )
 
 # Anything else long gets truncated rather than redacted outright — this is the backstop for
 # fields that aren't sensitively *named* but could still carry a full LLM prompt or a serialized
-# user-context blob (e.g. "messages", "context") if logged carelessly.
+# user-context blob if logged carelessly under some other key.
 _MAX_STRING_LEN = 500
 _REDACTED = "[REDACTED]"
+
+# Types that are safe to log as-is: structural/correlation values (ids, dates, counters), never
+# free-text payloads. Anything that isn't one of these, a Mapping, a list/tuple, a str, a
+# BaseModel, or a dataclass is unknown-shaped and gets redacted outright by the final fallback
+# below — the same object would otherwise silently bypass every check here and reach
+# json.dumps(..., default=str) unscrubbed.
+_SAFE_SCALAR_TYPES: tuple[type, ...] = (
+    int,
+    float,
+    bool,
+    type(None),
+    uuid.UUID,
+    datetime.date,
+    datetime.datetime,
+    datetime.time,
+)
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -50,6 +78,13 @@ def redact(value: Any, *, key: str = "") -> Any:
     """Recursively scrubs `value`. Call with the field name as `key` for top-level calls so
     sensitively-named fields (see _SENSITIVE_KEY_MARKERS) are fully redacted; nested dict/list
     values are walked with their own keys.
+
+    Pydantic models and dataclasses (e.g. a raw OpenAI request/response object, a user-context
+    struct) are normalized to plain dicts first so their *contents* still go through the same
+    key-by-key redaction, rather than passing the object through unscrubbed. Any other object of
+    an unrecognized type — not a Mapping/list/str/None/bool/number/uuid/date, and not a known
+    structured type — is treated as unknown-shaped and replaced with `[REDACTED]` outright, since
+    there's no way to know what it serializes to.
     """
     if _is_sensitive_key(key):
         return _REDACTED
@@ -57,10 +92,18 @@ def redact(value: Any, *, key: str = "") -> Any:
         return {str(k): redact(v, key=str(k)) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [redact(v, key=key) for v in value]
-    if isinstance(value, str) and len(value) > _MAX_STRING_LEN:
-        omitted = len(value) - _MAX_STRING_LEN
-        return f"{value[:_MAX_STRING_LEN]}...[truncated {omitted} chars]"
-    return value
+    if isinstance(value, str):
+        if len(value) > _MAX_STRING_LEN:
+            omitted = len(value) - _MAX_STRING_LEN
+            return f"{value[:_MAX_STRING_LEN]}...[truncated {omitted} chars]"
+        return value
+    if isinstance(value, BaseModel):
+        return redact(value.model_dump(mode="json"), key=key)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return redact(dataclasses.asdict(value), key=key)
+    if isinstance(value, _SAFE_SCALAR_TYPES):
+        return value
+    return _REDACTED
 
 
 _job_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("job_id", default=None)

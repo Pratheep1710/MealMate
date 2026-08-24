@@ -1,6 +1,12 @@
-// MP-023 regression test: expo-secure-store has no web implementation (it throws), which left the
-// app stuck on its loading spinner forever on web — caught by actually running the app in a
-// browser, not by a unit test. This locks in the localStorage fallback for platformOS === 'web'.
+// MP-023 regression tests for the web storage adapter.
+//
+// 1. expo-secure-store has no web implementation (it throws), which left the app stuck on its
+//    loading spinner forever on web — caught by actually running the app in a browser, not by a
+//    unit test.
+// 2. The first fix for that used localStorage, which persists tokens in plaintext, readable by
+//    any same-origin script — a reviewer caught that this violates MP-023's "no plaintext token
+//    storage" AC, which has no web carve-out. This locks in the corrected fix: a non-persistent,
+//    in-memory store for platformOS === 'web' that never touches disk at all.
 import { createSessionStorage } from '../supabase';
 
 jest.mock('@supabase/supabase-js', () => ({
@@ -13,40 +19,39 @@ jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn(() => Promise.reject(new Error('SecureStore is native-only'))),
 }));
 
-// jest-expo's test environment has no DOM/localStorage (it's native-oriented, not browser-
-// oriented) — a minimal in-memory stand-in is enough to prove the adapter round-trips through
-// whatever `localStorage` exists at runtime, same as a real browser would provide.
-class MemoryLocalStorage {
-  private store = new Map<string, string>();
-  getItem(key: string) {
-    return this.store.has(key) ? this.store.get(key)! : null;
-  }
-  setItem(key: string, value: string) {
-    this.store.set(key, value);
-  }
-  removeItem(key: string) {
-    this.store.delete(key);
-  }
-  clear() {
-    this.store.clear();
-  }
-}
-
 describe('createSessionStorage("web")', () => {
-  beforeEach(() => {
-    (globalThis as unknown as { localStorage: MemoryLocalStorage }).localStorage =
-      new MemoryLocalStorage();
-  });
-
-  it('uses localStorage instead of expo-secure-store', async () => {
+  it('round-trips values through an in-memory store, never expo-secure-store', async () => {
     const storage = createSessionStorage('web');
 
     await storage.setItem('sb-session', 'token-value');
     await expect(storage.getItem('sb-session')).resolves.toBe('token-value');
-    expect(localStorage.getItem('sb-session')).toBe('token-value');
 
     await storage.removeItem('sb-session');
     await expect(storage.getItem('sb-session')).resolves.toBeNull();
+  });
+
+  it('never touches localStorage — nothing is written to disk-backed browser storage', async () => {
+    const localStorageSpy = { setItem: jest.fn(), getItem: jest.fn(), removeItem: jest.fn() };
+    (globalThis as unknown as { localStorage: typeof localStorageSpy }).localStorage =
+      localStorageSpy;
+
+    const storage = createSessionStorage('web');
+    await storage.setItem('sb-session', 'token-value');
+    await storage.getItem('sb-session');
+    await storage.removeItem('sb-session');
+
+    expect(localStorageSpy.setItem).not.toHaveBeenCalled();
+    expect(localStorageSpy.getItem).not.toHaveBeenCalled();
+    expect(localStorageSpy.removeItem).not.toHaveBeenCalled();
+  });
+
+  it('does not share state across separate createSessionStorage() instances', async () => {
+    const storageA = createSessionStorage('web');
+    const storageB = createSessionStorage('web');
+
+    await storageA.setItem('sb-session', 'a-value');
+
+    await expect(storageB.getItem('sb-session')).resolves.toBeNull();
   });
 });
 

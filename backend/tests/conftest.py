@@ -7,10 +7,19 @@ the live Supabase project runs, per the Phase 2 brief's "not a bypassed test dat
 
 Repositories connect the same way app/db.py does in production: as the elevated Postgres role
 (the direct-connection equivalent of Supabase's service_role), which bypasses RLS by Postgres
-design. That means these tests validate the real schema — constraints, FKs, uniqueness — and that
-repository queries scope correctly by argument (e.g. by user_id), not that RLS itself rejects
-cross-user access; that guarantee is already covered by supabase/tests/rls.test.mjs on the client
-path, and by MP-023's mobile-side cross-user test.
+design — appropriate for the job/notification/generation paths that are genuinely
+service_role-privileged in production (see supabase/migrations/0006's comments). Most of the
+tests in test_repositories.py exercise that path: schema, constraints, FKs, and that queries scope
+correctly by argument.
+
+For the tables a real signed-in user also reads directly through supabase-js (user_profiles,
+meal_plans, plan_items, ...), that's not the whole picture: it doesn't prove RLS itself rejects
+cross-user access if a repository function were ever called with the wrong user id, or reused
+from a less-privileged connection. test_rls_enforcement.py exercises those same repository
+functions over a connection switched to the `authenticated` role with `request.jwt.claim.sub` set
+(mirroring supabase/tests/helpers.mjs's asUser/asAnon), so cross-user denial is asserted at the
+RLS layer itself — not just inferred from supabase/tests/rls.test.mjs's client-path coverage or
+MP-023's mobile-side cross-user test, which cover the same guarantee from a different angle.
 
 Skips (not fails) when no local Postgres is reachable — set POSTGRES_TEST_HOST/PORT/USER/PASSWORD
 to point at one; defaults match the CI service container and a `service postgresql start` local
@@ -127,3 +136,21 @@ def make_user(conn: psycopg.Connection[DictRow]):
         return user_id
 
     return _make_user
+
+
+@pytest.fixture
+def as_authenticated_user(conn: psycopg.Connection[DictRow]):
+    """Switches `conn` to the `authenticated` Postgres role with `request.jwt.claim.sub` set to
+    the given user id — the same session-level mechanism supabase/tests/helpers.mjs's asUser()
+    uses, and what auth.uid() (0006's RLS policies) actually reads. `SET` (not `SET LOCAL`) is
+    transactional in Postgres, so this reverts automatically with the `conn` fixture's teardown
+    rollback — no explicit reset needed between tests.
+    """
+
+    def _as(user_id: uuid.UUID) -> None:
+        conn.execute("set role authenticated")
+        # set_config (not a literal `SET ... = %s`, which Postgres doesn't accept a bind
+        # parameter for) is the parameterized way to set a custom GUC.
+        conn.execute("select set_config('request.jwt.claim.sub', %s, false)", (str(user_id),))
+
+    return _as

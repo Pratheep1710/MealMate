@@ -20,3 +20,4 @@ class NotificationLog(BaseModel):
     attempt: int
     created_at: datetime.datetime
     updated_at: datetime.datetime
+    delivered_at: datetime.datetime | None

@@ -102,7 +102,45 @@ jobs:
       - name: Prettier format check
         run: npx prettier --check .
 
+      # MP-023's cross-user RLS test (rls-cross-user.test.ts) needs a live Supabase project plus
+      # TWO confirmed test users, or it skips instead of asserting anything — see
+      # backend/scripts/provision_ci_test_users.py and docs/MP-023-cross-user-rls-test.md. Same-repo
+      # runs (push, or a same-repo PR — this project takes no external fork PRs) must fail loudly
+      # here rather than let that test quietly skip forever; a fork PR run has no repo secrets by
+      # GitHub's own design and is exempt.
+      - name: Verify live RLS test credentials are configured
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_TEST_USER_EMAIL: ${{ secrets.SUPABASE_TEST_USER_EMAIL }}
+          SUPABASE_TEST_USER_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_PASSWORD }}
+          SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
+          SUPABASE_TEST_USER_B_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
+        run: |
+          missing=()
+          for var in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_TEST_USER_EMAIL \
+                      SUPABASE_TEST_USER_PASSWORD SUPABASE_TEST_USER_B_EMAIL \
+                      SUPABASE_TEST_USER_B_PASSWORD; do
+            if [ -z "${!var}" ]; then
+              missing+=("$var")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::MP-023's live cross-user RLS test cannot run — missing repo secrets: ${missing[*]}"
+            echo "Run backend/scripts/provision_ci_test_users.py to provision the two test users," \
+                 "then add the printed values as repo secrets. See docs/MP-023-cross-user-rls-test.md."
+            exit 1
+          fi
+
       - name: Jest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_TEST_USER_EMAIL: ${{ secrets.SUPABASE_TEST_USER_EMAIL }}
+          SUPABASE_TEST_USER_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_PASSWORD }}
+          SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
+          SUPABASE_TEST_USER_B_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
         run: npx jest --ci
 
       - name: npm audit (high+ only)

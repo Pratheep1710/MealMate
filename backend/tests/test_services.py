@@ -11,7 +11,12 @@ from app.services.notification_slo import compute_daily_reminder_slo
 _FIRE_TIME = datetime.datetime(2026, 8, 23, 20, 0, tzinfo=datetime.UTC)
 
 
-def _notification(status: str, minutes_after_fire: float) -> NotificationLog:
+def _notification(status: str, minutes_after_fire: float | None) -> NotificationLog:
+    delivered_at = (
+        _FIRE_TIME + datetime.timedelta(minutes=minutes_after_fire)
+        if status == "delivered" and minutes_after_fire is not None
+        else None
+    )
     return NotificationLog(
         id=uuid.uuid4(),
         user_id=uuid.uuid4(),
@@ -21,7 +26,8 @@ def _notification(status: str, minutes_after_fire: float) -> NotificationLog:
         expo_ticket_id=None,
         attempt=1,
         created_at=_FIRE_TIME,
-        updated_at=_FIRE_TIME + datetime.timedelta(minutes=minutes_after_fire),
+        updated_at=_FIRE_TIME + datetime.timedelta(minutes=minutes_after_fire or 0),
+        delivered_at=delivered_at,
     )
 
 
@@ -38,6 +44,27 @@ def test_delivered_outside_window_does_not_count():
     assert result.delivered_in_window == 0
     assert result.total == 1
     assert not result.meets_target
+
+
+def test_delivered_before_cron_fire_time_does_not_count():
+    """Regression: `abs(delivered_at - cron_fire_time) <= window` would have wrongly counted a
+    delivery timestamped *before* the cron even fired (a clock-skew/data bug, not an on-time
+    delivery) as within the window. The window is one-sided: [fire_time, fire_time + 10min].
+    """
+    result = compute_daily_reminder_slo([_notification("delivered", -5)], _FIRE_TIME)
+    assert result.delivered_in_window == 0
+    assert result.total == 1
+
+
+def test_delivered_status_without_delivered_at_does_not_count():
+    """Defensive: a 'delivered' row somehow missing delivered_at must not count — never crash,
+    never silently count as on-time.
+    """
+    notification = _notification("delivered", None)
+    assert notification.delivered_at is None
+    result = compute_daily_reminder_slo([notification], _FIRE_TIME)
+    assert result.delivered_in_window == 0
+    assert result.total == 1
 
 
 def test_failed_and_stuck_pending_never_count_toward_numerator():
