@@ -134,6 +134,39 @@ describe('GroceryListScreen', () => {
     expect(textOf(tree)).toContain("isn't ready yet");
   });
 
+  it('excludes skipped meal plans from the "currently required" query, so a skipped meal never produces a false "New" badge', async () => {
+    const mealPlansBuilder = chainable({
+      data: [{ plan_items: [{ dish_id: 'dish-2' }] }],
+      error: null,
+    });
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'meal_plans') {
+        return mealPlansBuilder;
+      }
+      const tables: Record<string, { data: unknown; error: unknown }> = {
+        grocery_list_snapshot: {
+          data: {
+            week_start: '2026-08-24',
+            ingredients: [{ ingredient_id: 'ing-1', name: 'Onion' }],
+          },
+          error: null,
+        },
+        dish_ingredients: {
+          data: [{ ingredient_id: 'ing-2', ingredients: { canonical_name: 'Carrot' } }],
+          error: null,
+        },
+      };
+      return chainable(tables[table]);
+    });
+
+    await renderScreen();
+
+    // The bug this guards: an eating-out/skipped meal isn't cooked, so its ingredients must not
+    // be treated as "currently required" — without filtering at the query, a skipped meal that
+    // used a not-yet-frozen ingredient would badge it as "New" even though it will never be bought.
+    expect(mealPlansBuilder.eq).toHaveBeenCalledWith('is_skipped', false);
+  });
+
   it('surfaces a query error instead of silently showing an empty list', async () => {
     mockTables({
       grocery_list_snapshot: {

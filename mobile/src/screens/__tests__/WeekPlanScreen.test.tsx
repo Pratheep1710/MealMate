@@ -11,9 +11,14 @@ const days = rollingDays(new Date());
 const today = days[0].iso;
 
 const mockFrom = jest.fn();
+const mockUseSession = jest.fn();
 
 jest.mock('../../lib/supabase', () => ({
   supabase: { from: (...args: unknown[]) => mockFrom(...args) },
+}));
+
+jest.mock('../../contexts/SessionContext', () => ({
+  useSession: () => mockUseSession(),
 }));
 
 function chainable(result: { data: unknown; error: unknown }) {
@@ -83,6 +88,7 @@ function todayRow(overrides: Partial<Record<string, unknown>> = {}) {
 beforeEach(async () => {
   jest.clearAllMocks();
   await AsyncStorage.clear();
+  mockUseSession.mockReturnValue({ session: { user: { id: 'user-1' } } });
 });
 
 describe('WeekPlanScreen', () => {
@@ -206,5 +212,82 @@ describe('WeekPlanScreen', () => {
     const tree = await renderScreen();
 
     expect(textOf(tree)).toContain("Couldn't load your plan");
+  });
+
+  it('renders slot rows in chronological (spine time) order, not the raw DB slot order', async () => {
+    const rowFor = (slot: string, dishName: string) => ({
+      id: `plan-${slot}`,
+      plan_date: today,
+      slot,
+      is_skipped: false,
+      plan_items: [
+        {
+          id: `item-${slot}`,
+          item_type: 'rice',
+          status: 'filled',
+          make_extra: false,
+          dishes: { name: dishName },
+        },
+      ],
+    });
+
+    // Deliberately supplied out of chronological order (and in the DB enum's own order —
+    // morning, afternoon, night, snack_1, snack_2, snack_3 — so a regression back to rendering
+    // by SLOTS instead of CHRONOLOGICAL_SLOTS would still pass a naively-ordered fixture).
+    mockFrom.mockReturnValue(
+      chainable({
+        data: [
+          rowFor('night', 'Night Dish'),
+          rowFor('morning', 'Morning Dish'),
+          rowFor('snack_2', 'Snack2 Dish'),
+          rowFor('afternoon', 'Afternoon Dish'),
+          rowFor('snack_1', 'Snack1 Dish'),
+          rowFor('snack_3', 'Snack3 Dish'),
+        ],
+        error: null,
+      }),
+    );
+
+    const tree = await renderScreen();
+
+    const renderedOrder = [
+      ...new Set(
+        tree.root
+          .findAll(
+            (node) =>
+              typeof node.type === 'string' &&
+              typeof node.props.testID === 'string' &&
+              node.props.testID.startsWith('slot-row-'),
+          )
+          .map((node) => node.props.testID as string),
+      ),
+    ];
+
+    expect(renderedOrder).toEqual([
+      'slot-row-morning',
+      'slot-row-snack_1',
+      'slot-row-afternoon',
+      'slot-row-snack_2',
+      'slot-row-night',
+      'slot-row-snack_3',
+    ]);
+  });
+
+  it('never shows user A\'s cached plan when user B goes offline on the same device', async () => {
+    mockUseSession.mockReturnValue({ session: { user: { id: 'user-a' } } });
+    mockFrom.mockReturnValue(chainable({ data: [todayRow()], error: null }));
+
+    const userATree = await renderScreen();
+    expect(textOf(userATree)).toContain('Sambar Sadam');
+
+    mockUseSession.mockReturnValue({ session: { user: { id: 'user-b' } } });
+    mockFrom.mockReturnValue(
+      chainable({ data: null, error: { message: 'network request failed' } }),
+    );
+
+    const userBTree = await renderScreen();
+
+    expect(textOf(userBTree)).not.toContain('Sambar Sadam');
+    expect(textOf(userBTree)).toContain("Couldn't load your plan");
   });
 });

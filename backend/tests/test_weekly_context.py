@@ -50,6 +50,43 @@ def test_pattern_pins_named_days_nonveg_and_the_rest_veg_only() -> None:
     assert context.nonveg_days_per_week == 2
 
 
+def test_pattern_in_the_persisted_abbreviated_form_still_pins_the_right_days() -> None:
+    # Regression: 0002_user_profile_favorites_schema.sql's own column comment shows the actually
+    # persisted form as {wed, sat} — the abbreviated form, not the full weekday name. Comparing
+    # against full names only (as this module used to) silently treats every stored pattern as
+    # empty, degrading every day to 'veg_only' instead of the intended 'required' days.
+    profile = _profile(nonveg_days_per_week=2, nonveg_day_pattern=["wed", "sat"])
+    context = compute_weekly_context(profile, _WEEK_START)
+
+    by_name = {day.day_name: day.nonveg_constraint for day in context.days}
+    assert by_name["wednesday"] == "required"
+    assert by_name["saturday"] == "required"
+    for name in ("monday", "tuesday", "thursday", "friday", "sunday"):
+        assert by_name[name] == "veg_only"
+
+
+def test_pattern_normalization_is_case_insensitive() -> None:
+    profile = _profile(nonveg_days_per_week=1, nonveg_day_pattern=["WED"])
+    context = compute_weekly_context(profile, _WEEK_START)
+    by_name = {day.day_name: day.nonveg_constraint for day in context.days}
+    assert by_name["wednesday"] == "required"
+
+
+def test_pattern_and_count_disagreeing_still_produces_a_deterministic_pattern_driven_result() -> (
+    None
+):
+    # nonveg_days_per_week and the pattern's length aren't cross-validated against each other here
+    # (that's a data-entry concern, not this computation's) — the pattern is authoritative for the
+    # per-day answer regardless of what the count says.
+    profile = _profile(nonveg_days_per_week=5, nonveg_day_pattern=["wed"])
+    context = compute_weekly_context(profile, _WEEK_START)
+
+    by_name = {day.day_name: day.nonveg_constraint for day in context.days}
+    assert by_name["wednesday"] == "required"
+    assert sum(1 for day in context.days if day.nonveg_constraint == "required") == 1
+    assert context.nonveg_days_per_week == 5
+
+
 def test_no_pattern_leaves_every_day_flexible() -> None:
     profile = _profile(nonveg_days_per_week=2, nonveg_day_pattern=None)
     context = compute_weekly_context(profile, _WEEK_START)

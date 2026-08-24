@@ -42,7 +42,11 @@ async function fetchCurrentWeekDishIds(dates: string[]): Promise<string[]> {
     .from('meal_plans')
     .select('plan_items(dish_id)')
     .gte('plan_date', dates[0])
-    .lte('plan_date', dates[dates.length - 1]);
+    .lte('plan_date', dates[dates.length - 1])
+    // A skipped/eating-out meal isn't being cooked, so its ingredients must not count toward
+    // "currently required" — without this filter, skipping a meal that used a not-yet-frozen
+    // ingredient could produce a false "New" badge for something the user will never buy.
+    .eq('is_skipped', false);
 
   if (error) {
     throw error;

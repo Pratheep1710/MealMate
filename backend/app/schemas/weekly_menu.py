@@ -33,9 +33,17 @@ class WeeklyMenuItem(BaseModel):
 
 
 class WeeklyMenu(BaseModel):
-    """One full week's worth of items. Structural completeness — every (day, slot) pair for the
-    7 days starting at `week_start` present exactly once — is enforced here because it's still
-    shape, not business logic: it says nothing about *which* dish was picked.
+    """A week's (or partial week's, for the regenerate-remaining-week path, docs/MP-001) worth of
+    items. Structural completeness is enforced here because it's still shape, not business logic —
+    it says nothing about *which* dish was picked:
+
+    - Every `day` present must fall within the 7 days starting at `week_start`.
+    - Every `day` present must have all 6 slots represented at least once — but a slot may appear
+      more than once, since a real slot is often composed of several dishes (e.g. lunch = rice +
+      a gravy + poriyal; `plan_items` already supports multiple rows per slot). Uniqueness at the
+      (day, slot) level would reject exactly the composed-slot shape the schema needs to represent.
+    - Not every one of the 7 days needs to be present — regenerating only the remaining days of an
+      in-progress week is a valid, narrower call to this same contract.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -44,23 +52,25 @@ class WeeklyMenu(BaseModel):
     items: list[WeeklyMenuItem]
 
     @model_validator(mode="after")
-    def _items_cover_the_week_exactly(self) -> WeeklyMenu:
-        expected_days = {
+    def _items_are_structurally_complete(self) -> WeeklyMenu:
+        if not self.items:
+            raise ValueError("weekly menu must contain at least one item")
+
+        valid_days = {
             self.week_start + datetime.timedelta(days=offset)
             for offset in range(_WEEK_LENGTH_DAYS)
         }
-        expected_keys = {(day, slot) for day in expected_days for slot in _SLOTS}
-        actual_keys = [(item.day, item.slot) for item in self.items]
+        out_of_range = {item.day for item in self.items if item.day not in valid_days}
+        if out_of_range:
+            raise ValueError(f"day(s) outside the target week: {sorted(out_of_range)}")
 
-        if len(actual_keys) != len(set(actual_keys)):
-            raise ValueError("duplicate (day, slot) entries in weekly menu items")
+        slots_by_day: dict[datetime.date, set[Slot]] = {}
+        for item in self.items:
+            slots_by_day.setdefault(item.day, set()).add(item.slot)
 
-        missing = expected_keys - set(actual_keys)
-        if missing:
-            raise ValueError(f"missing (day, slot) entries: {sorted(missing)}")
-
-        extra = set(actual_keys) - expected_keys
-        if extra:
-            raise ValueError(f"(day, slot) entries outside the target week: {sorted(extra)}")
+        for day, slots in sorted(slots_by_day.items()):
+            missing_slots = set(_SLOTS) - slots
+            if missing_slots:
+                raise ValueError(f"{day} is missing slot(s): {sorted(missing_slots)}")
 
         return self

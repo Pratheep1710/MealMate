@@ -5,16 +5,17 @@ import { BottomSheet } from '../components/BottomSheet';
 import { RefreshIcon } from '../components/icons';
 import { PulseRing } from '../components/PulseRing';
 import { Shimmer } from '../components/Shimmer';
+import { useSession } from '../contexts/SessionContext';
 import { supabase } from '../lib/supabase';
 import { type CachedPayload, loadCache, saveCache } from '../lib/weekCache';
 import { colors, fonts, radii, spacing } from '../theme/tokens';
 import {
+  CHRONOLOGICAL_SLOTS,
   kickerFor,
   phaseFor,
   type RollingDay,
   rollingDays,
   SLOT_META,
-  SLOTS,
   type Slot,
 } from './weekPlan/rollingDays';
 
@@ -99,6 +100,8 @@ async function fetchRollingWindow(days: RollingDay[]): Promise<MealPlanRow[]> {
 }
 
 export function WeekPlanScreen() {
+  const { session } = useSession();
+  const userId = session?.user.id ?? null;
   const days = useMemo(() => rollingDays(new Date()), []);
   const [view, setView] = useState<ViewState>({ kind: 'loading' });
   const [slotSheet, setSlotSheet] = useState<{ day: RollingDay; slot: Slot } | null>(null);
@@ -106,12 +109,18 @@ export function WeekPlanScreen() {
 
   const load = async () => {
     setView({ kind: 'loading' });
+    if (!userId) {
+      // This screen only ever mounts inside the authenticated tree (RootNavigator), so this is
+      // defensive, not an expected path — without a user id there is no safe cache to key by.
+      setView({ kind: 'offline', cached: null });
+      return;
+    }
     try {
       const plans = await fetchRollingWindow(days);
       setView({ kind: 'ready', plans });
-      await saveCache(CACHE_KEY, plans);
+      await saveCache(CACHE_KEY, userId, plans);
     } catch {
-      const cached = await loadCache<MealPlanRow[]>(CACHE_KEY);
+      const cached = await loadCache<MealPlanRow[]>(CACHE_KEY, userId);
       setView({ kind: 'offline', cached });
     }
   };
@@ -122,10 +131,10 @@ export function WeekPlanScreen() {
     // flags here.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
-    // `load` is intentionally omitted: it's stable in practice (only closes over `days`, itself
-    // derived from `new Date()` once at mount) and including it would refetch on every render.
+    // `load` is intentionally omitted: it's stable in practice (only closes over `days` and
+    // `userId`, and including it would refetch on every render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userId]);
 
   if (view.kind === 'loading') {
     return (
@@ -148,7 +157,7 @@ export function WeekPlanScreen() {
   }
 
   const plansByKey = byPlansMap(view.plans);
-  const todayRows = SLOTS.map((slot) => plansByKey.get(slotKey(days[0].iso, slot)) ?? null);
+  const todayRows = CHRONOLOGICAL_SLOTS.map((slot) => plansByKey.get(slotKey(days[0].iso, slot)) ?? null);
   const todayHasAnyPlan = todayRows.some((row) => row !== null);
 
   return (
@@ -158,14 +167,14 @@ export function WeekPlanScreen() {
 
         {todayHasAnyPlan ? (
           <View style={styles.card}>
-            {SLOTS.map((slot, index) => {
+            {CHRONOLOGICAL_SLOTS.map((slot, index) => {
               const row = plansByKey.get(slotKey(days[0].iso, slot)) ?? null;
               return (
                 <SlotRow
                   key={slot}
                   slot={slot}
                   row={row}
-                  isLast={index === SLOTS.length - 1}
+                  isLast={index === CHRONOLOGICAL_SLOTS.length - 1}
                   onPress={row ? () => setSlotSheet({ day: days[0], slot }) : undefined}
                 />
               );
@@ -304,11 +313,11 @@ function SlotRow({
 function TodaySkeleton() {
   return (
     <View style={styles.card} testID="today-skeleton">
-      {SLOTS.map((slot, index) => (
+      {CHRONOLOGICAL_SLOTS.map((slot, index) => (
         <View key={slot} style={styles.slotRow}>
           <Text style={styles.slotTime}>{SLOT_META[slot].time}</Text>
           <View style={styles.slotRailColumn}>
-            {index !== SLOTS.length - 1 && <View style={styles.rail} />}
+            {index !== CHRONOLOGICAL_SLOTS.length - 1 && <View style={styles.rail} />}
             <View style={styles.nodeSkeleton} />
           </View>
           <View style={{ flex: 1, gap: 7, paddingTop: 2 }}>
@@ -481,12 +490,12 @@ function OfflineView({
 
       <Text style={styles.sectionLabel}>Saved {savedLabel}</Text>
       <View style={[styles.card, { opacity: 0.72 }]}>
-        {SLOTS.map((slot, index) => (
+        {CHRONOLOGICAL_SLOTS.map((slot, index) => (
           <SlotRow
             key={slot}
             slot={slot}
             row={plansByKey.get(slotKey(today.iso, slot)) ?? null}
-            isLast={index === SLOTS.length - 1}
+            isLast={index === CHRONOLOGICAL_SLOTS.length - 1}
           />
         ))}
       </View>

@@ -1,4 +1,4 @@
-import { kickerFor, phaseFor, rollingDays } from '../rollingDays';
+import { CHRONOLOGICAL_SLOTS, kickerFor, phaseFor, rollingDays, SLOT_META } from '../rollingDays';
 
 describe('rollingDays', () => {
   it('returns today plus the next five days, in order', () => {
@@ -28,6 +28,23 @@ describe('rollingDays', () => {
 describe('kickerFor', () => {
   it('formats as "Weekday D Month"', () => {
     expect(kickerFor(new Date(2026, 7, 27))).toBe('Thu 27 August');
+  });
+});
+
+describe('CHRONOLOGICAL_SLOTS', () => {
+  it('orders the day spine by actual time of day, not the DB enum order', () => {
+    // SLOTS (DB order) is morning, afternoon, night, snack_1, snack_2, snack_3 — that would
+    // render as 6:40, 12:45, 19:45, then 10:30, 16:15, 21:30, which is out of order.
+    expect(CHRONOLOGICAL_SLOTS).toEqual([
+      'morning',
+      'snack_1',
+      'afternoon',
+      'snack_2',
+      'night',
+      'snack_3',
+    ]);
+    const hours = CHRONOLOGICAL_SLOTS.map((slot) => SLOT_META[slot].hour);
+    expect(hours).toEqual([...hours].sort((a, b) => a - b));
   });
 });
 
