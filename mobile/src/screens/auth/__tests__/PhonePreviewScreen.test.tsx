@@ -89,7 +89,7 @@ describe('PhonePreviewScreen', () => {
     jest.useRealTimers();
   });
 
-  it('the done step\'s CTA exits to real sign-in rather than entering the app', async () => {
+  it("the done step's CTA exits to real sign-in rather than entering the app", async () => {
     jest.useFakeTimers();
     const tree = await renderScreen();
 
