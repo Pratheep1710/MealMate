@@ -1,12 +1,12 @@
 # MP-027/028 — Claude Design Pass: What Got Built, What Didn't, and Why
 
-Source: claude.ai/design project `b56ee743-b4e9-4d39-a6b7-ff431c2c3f66` ("Meal Planner.dc.html" +
-its design brief, `uploads/meal-planner-claude-design-brief.md`). The brief scoped three screens —
-weekly plan view, review/edit, and the evening-before push notification — plus a token system (a
-"day spine" layout, Newsreader/Hanken Grotesk type pairing, a Tamil Nadu-grounded palette named
-after kitchen objects: ink/leaf/turmeric/steel/ground). This doc records what actually shipped
-against that brief and, per the same pattern as `MP-015`/`MP-017`, what was deliberately left out
-and why — not silently.
+Source: claude.ai/design project `b56ee743-b4e9-4d39-a6b7-ff431c2c3f66` — "Meal Planner.dc.html"
+(the weekly plan pass, its design brief at `uploads/meal-planner-claude-design-brief.md`) and
+"Meal Planner Auth.dc.html" (the auth pass). The brief scoped three screens — weekly plan view,
+review/edit, and the evening-before push notification — plus a token system (a "day spine" layout,
+Newsreader/Hanken Grotesk type pairing, a Tamil Nadu-grounded palette named after kitchen objects:
+ink/leaf/turmeric/steel/ground). This doc records what actually shipped against both passes and,
+per the same pattern as `MP-015`/`MP-017`, what was deliberately left out and why — not silently.
 
 ## What shipped
 
@@ -20,6 +20,12 @@ and why — not silently.
   `mobile/src/lib/weekCache.ts`) rather than a bare error.
 - Bottom tab labels/icons relabeled to match the design's voice (Week / List / You), reusing the
   existing three tabs — no new tab was added.
+- **Auth screens, reskinned and extended** (`mobile/src/screens/SignInScreen.tsx`,
+  `mobile/src/screens/auth/`): a new pre-auth `LandingScreen` (illustrative sample-day spine, see
+  `SampleDaySpine.tsx`, plus the design's two entry points), the existing email/password `SignIn`
+  reskinned to the token system, and a new `SignUpScreen` — email+password is the only mechanism
+  actually wired to Supabase Auth, so this is the real, working account-creation path the original
+  design didn't need to spec (it leads with phone/Google). `SessionContext` gained `signUp`.
 
 ## What's real vs. inert, and why
 
@@ -38,6 +44,30 @@ present but opens a short, calm, honest sheet ("Once the dish list is ready, thi
 something new for you") instead of performing a no-op action that would look broken. This was a
 deliberate scope choice, confirmed before implementation — see the option chosen: "build the full
 visual redesign, disable edits."
+
+## Auth: phone/OTP and Google, built as an inert preview
+
+The auth design leads with phone number + SMS OTP and "Continue with Google," neither of which
+Supabase Auth is configured for in this project (no SMS provider, no Google OAuth client) — that's
+account-owner-only setup in the Supabase dashboard and Google Cloud Console, not something buildable
+from code. Confirmed before implementation: build both the real (email/password) and the inert
+preview, rather than either faking a connection or skipping the visual work.
+
+- **`PhonePreviewScreen`**: the phone-entry → OTP → "You're in." flow exactly as designed — a real,
+  working numeric keypad and local step-through state, not a static mockup. It's labeled "Preview"
+  throughout, and the done screen says plainly that nothing was created; its CTA exits to the real
+  sign-in/sign-up screens rather than pretending a session started.
+- **"Continue with Google"** is a real button (`LandingScreen`) that opens a calm "not set up yet"
+  sheet, matching the pattern the plan-view sheets already use, instead of a no-op.
+- **Not built at all: the Google account-picker mockup screen.** The design shows what the OS-level
+  Google sign-in sheet looks like, complete with an invented person's name and email. That's
+  real-looking system chrome Google itself draws during a genuine OAuth flow, not UI this app
+  renders — building our own copy of it, even for a design review, is the shape of a credential-
+  phishing spoof regardless of intent, so it was left out.
+- **Not built: the "signing back in" returning-user variant** (pre-filled number, a teaser of
+  tonight's plan on the lock-adjacent screen). It only makes sense once phone auth is real and the
+  device has a genuine "returning user" signal to key off; deferred with everything else phone-auth
+  depends on.
 
 ## What was left out of this pass entirely
 

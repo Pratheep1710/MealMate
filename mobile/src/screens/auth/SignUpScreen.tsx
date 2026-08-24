@@ -12,32 +12,61 @@ import {
   View,
 } from 'react-native';
 
-import { useSession } from '../contexts/SessionContext';
-import type { AuthStackParamList } from '../navigation/types';
-import { colors, fonts, radii, spacing } from '../theme/tokens';
+import { useSession } from '../../contexts/SessionContext';
+import type { AuthStackParamList } from '../../navigation/types';
+import { colors, fonts, radii, spacing } from '../../theme/tokens';
 
-// MP-027/028 design pass, Auth: reskinned to the Claude Design tokens/type system, kept on the
-// real, working email+password mechanism (signInWithPassword) — see
-// docs/MP-027-design-pass-scope.md for why phone/Google aren't wired to real auth yet.
-export function SignInScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<AuthStackParamList, 'SignIn'>>();
-  const { signInWithPassword } = useSession();
+// MP-027/028 design pass, Auth: the real account-creation path this design didn't originally spec
+// (it leads with phone/Google) — added because email+password is the only mechanism actually
+// wired to Supabase Auth right now. See docs/MP-027-design-pass-scope.md.
+export function SignUpScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<AuthStackParamList, 'SignUp'>>();
+  const { signUp } = useSession();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmationSent, setConfirmationSent] = useState(false);
 
-  const canSubmit = !submitting && !!email && !!password;
+  const canSubmit = !submitting && !!email && password.length >= 6;
 
-  const handleSignIn = async () => {
+  const handleSignUp = async () => {
     setSubmitting(true);
     setError(null);
-    const { error: signInError } = await signInWithPassword(email, password);
+    const result = await signUp(email, password);
     setSubmitting(false);
-    if (signInError) {
-      setError(signInError);
+    if (result.error) {
+      setError(result.error);
+      return;
     }
+    if (result.needsConfirmation) {
+      setConfirmationSent(true);
+    }
+    // Otherwise the project auto-confirmed: onAuthStateChange already picked up the new session,
+    // and RootNavigator will move on from here on its own.
   };
+
+  if (confirmationSent) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.content}>
+          <Text style={styles.kicker}>Almost there</Text>
+          <Text style={styles.title}>Check your email</Text>
+          <Text style={styles.subtitle}>
+            We sent a confirmation link to {email}. Come back and sign in once you&apos;ve confirmed
+            it.
+          </Text>
+          <TouchableOpacity
+            style={styles.submitButton}
+            onPress={() => navigation.navigate('SignIn')}
+            testID="sign-up-go-to-sign-in"
+          >
+            <Text style={styles.submitLabel}>Sign in</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -45,9 +74,9 @@ export function SignInScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.content}>
-        <Text style={styles.kicker}>Welcome back</Text>
-        <Text style={styles.title}>Sign in</Text>
-        <Text style={styles.subtitle}>This week&apos;s plan is waiting.</Text>
+        <Text style={styles.kicker}>Getting in</Text>
+        <Text style={styles.title}>Create an account</Text>
+        <Text style={styles.subtitle}>One email, one password. That&apos;s the whole signup.</Text>
 
         <View style={styles.fieldGroup}>
           <Text style={styles.fieldLabel}>Email</Text>
@@ -60,7 +89,7 @@ export function SignInScreen() {
             keyboardType="email-address"
             value={email}
             onChangeText={setEmail}
-            testID="sign-in-email"
+            testID="sign-up-email"
           />
         </View>
 
@@ -68,42 +97,42 @@ export function SignInScreen() {
           <Text style={styles.fieldLabel}>Password</Text>
           <TextInput
             style={styles.input}
-            placeholder="••••••••"
+            placeholder="At least 6 characters"
             placeholderTextColor={colors.textFaint}
             secureTextEntry
-            autoComplete="password"
+            autoComplete="password-new"
             value={password}
             onChangeText={setPassword}
-            testID="sign-in-password"
+            testID="sign-up-password"
           />
         </View>
 
         {error ? (
-          <Text style={styles.error} testID="sign-in-error">
+          <Text style={styles.error} testID="sign-up-error">
             {error}
           </Text>
         ) : null}
 
         <TouchableOpacity
           style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
-          onPress={handleSignIn}
+          onPress={handleSignUp}
           disabled={!canSubmit}
-          testID="sign-in-submit"
+          testID="sign-up-submit"
         >
           {submitting ? (
             <ActivityIndicator color={colors.surface} />
           ) : (
-            <Text style={styles.submitLabel}>Sign in</Text>
+            <Text style={styles.submitLabel}>Create account</Text>
           )}
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.signUpRow}
-          onPress={() => navigation.navigate('SignUp')}
-          testID="sign-in-go-to-sign-up"
+          style={styles.signInRow}
+          onPress={() => navigation.navigate('SignIn')}
+          testID="sign-up-go-to-sign-in"
         >
-          <Text style={styles.signUpPrompt}>New here? </Text>
-          <Text style={styles.signUpLink}>Create an account</Text>
+          <Text style={styles.signInPrompt}>Already set up? </Text>
+          <Text style={styles.signInLink}>Sign in</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -137,6 +166,7 @@ const styles = StyleSheet.create({
   subtitle: {
     fontFamily: fonts.bodyRegular,
     fontSize: 15,
+    lineHeight: 21,
     color: colors.textSecondary,
     marginBottom: spacing.lg,
   },
@@ -184,19 +214,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.surface,
   },
-  signUpRow: {
+  signInRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 48,
     marginTop: spacing.sm,
   },
-  signUpPrompt: {
+  signInPrompt: {
     fontFamily: fonts.bodyRegular,
     fontSize: 14,
     color: colors.textSecondary,
   },
-  signUpLink: {
+  signInLink: {
     fontFamily: fonts.bodyRegular,
     fontSize: 14,
     color: colors.leaf,

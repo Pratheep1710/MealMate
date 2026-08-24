@@ -48,7 +48,7 @@ describe('RootNavigator state boundary', () => {
 
     const tree = renderRoot();
 
-    expect(textOf(tree)).toContain('Meal Planner');
+    expect(textOf(tree)).toContain('Ennanga Samayal');
   });
 
   it('shows a loading state while the session is still initializing', () => {
@@ -57,7 +57,7 @@ describe('RootNavigator state boundary', () => {
 
     const tree = renderRoot();
 
-    expect(textOf(tree)).not.toContain('Meal Planner');
+    expect(textOf(tree)).not.toContain('Ennanga Samayal');
     expect(textOf(tree)).not.toContain('week-plan-loading');
   });
 

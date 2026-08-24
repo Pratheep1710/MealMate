@@ -10,6 +10,14 @@ type SessionContextValue = {
   // sign-in screen for a user who's actually already authenticated.
   initializing: boolean;
   signInWithPassword: (email: string, password: string) => Promise<{ error: string | null }>;
+  // `needsConfirmation` distinguishes "account created, session started immediately" from "check
+  // your email to confirm" — which of those happens depends on the Supabase project's email
+  // confirmation setting, not on anything the client controls: a signed-in `data.session` on the
+  // response means the project auto-confirms, its absence means a confirmation email was sent.
+  signUp: (
+    email: string,
+    password: string,
+  ) => Promise<{ error: string | null; needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
 };
 
@@ -44,6 +52,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       signInWithPassword: async (email: string, password: string) => {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         return { error: error?.message ?? null };
+      },
+      signUp: async (email: string, password: string) => {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        return { error: error?.message ?? null, needsConfirmation: !error && !data.session };
       },
       signOut: async () => {
         await supabase.auth.signOut();
