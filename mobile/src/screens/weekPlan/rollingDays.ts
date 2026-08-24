@@ -15,6 +15,13 @@ export const SLOT_META: Record<Slot, { label: string; time: string; hour: number
   snack_3: { label: 'Late', time: '21:30', hour: 21.5 },
 };
 
+// SLOTS is the DB's canonical enum order (matches meal_plans_slot_check), not chronological — it's
+// fine as a lookup key order, but anything that *renders* the day spine needs this instead, or the
+// spine reads 6:40, 12:45, 19:45, then 10:30, 16:15, 21:30.
+export const CHRONOLOGICAL_SLOTS: readonly Slot[] = [...SLOTS].sort(
+  (a, b) => SLOT_META[a].hour - SLOT_META[b].hour,
+);
+
 function toISODate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -70,9 +77,7 @@ export type SlotPhase = 'past' | 'now' | 'upcoming';
  * the first slot of the day, nothing is 'now' yet.
  */
 export function phaseFor(slot: Slot, currentHour: number): SlotPhase {
-  // SLOTS is the DB's canonical (non-chronological) order — sort by actual time-of-day here so
-  // "the last slot at-or-before now" is found correctly regardless of enum declaration order.
-  const order = [...SLOTS].sort((a, b) => SLOT_META[a].hour - SLOT_META[b].hour);
+  const order = CHRONOLOGICAL_SLOTS;
   const idx = order.indexOf(slot);
   let nowIndex = -1;
   for (let i = 0; i < order.length; i++) {

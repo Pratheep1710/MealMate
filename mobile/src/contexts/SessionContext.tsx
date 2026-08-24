@@ -2,6 +2,7 @@ import type { Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { supabase } from '../lib/supabase';
+import { clearAllCache } from '../lib/weekCache';
 
 type SessionContextValue = {
   session: Session | null;
@@ -59,6 +60,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       },
       signOut: async () => {
         await supabase.auth.signOut();
+        // Prevents the next sign-in on this device (a different account) from ever reading this
+        // account's cached offline data — see weekCache.ts.
+        await clearAllCache();
       },
     }),
     [session, initializing],

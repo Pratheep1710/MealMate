@@ -189,7 +189,7 @@ class TestHistoryRepository:
         plans_repo.add_plan_item(conn, old_plan.id, "poriyal", old_dish)
 
         recent_ids = history_repo.get_recent_variety_dish_ids(
-            conn, user_id, datetime.date(2026, 8, 15)
+            conn, user_id, datetime.date(2026, 8, 15), datetime.date(2026, 8, 25)
         )
 
         assert recent_ids == [variety_dish]
@@ -207,7 +207,23 @@ class TestHistoryRepository:
         plans_repo.set_plan_skipped(conn, plan.id, True)
 
         recent_ids = history_repo.get_recent_variety_dish_ids(
-            conn, user_id, datetime.date(2026, 8, 15)
+            conn, user_id, datetime.date(2026, 8, 15), datetime.date(2026, 8, 25)
+        )
+
+        assert recent_ids == []
+
+    def test_before_bound_is_exclusive(self, conn, make_user):
+        """Regression: get_recent_variety_dish_ids had no upper bound at all, so a dish served on
+        or after `before` (today's own assignment, or a future generated week's) would count as
+        its own history and wrongly exclude itself.
+        """
+        user_id = make_user()
+        dish_id = _insert_dish(conn, name="Served On The Before Date", track_variety=True)
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 25), "night")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id)
+
+        recent_ids = history_repo.get_recent_variety_dish_ids(
+            conn, user_id, datetime.date(2026, 8, 15), datetime.date(2026, 8, 25)
         )
 
         assert recent_ids == []
@@ -260,6 +276,35 @@ class TestVarietyExclusionService:
         exclusion = variety_exclusion_service.get_variety_exclusion_set(conn, user_id, as_of)
 
         assert dish_id in exclusion
+
+    def test_a_dish_served_on_as_of_itself_is_not_excluded(self, conn, make_user):
+        """Regression: as_of's own generated day (today, or the day being generated) must never
+        exclude itself from its own candidate pool.
+        """
+        user_id = make_user()
+        as_of = datetime.date(2026, 8, 24)
+        dish_id = _insert_dish(conn, name="Served Today")
+        plan = plans_repo.create_plan_day(conn, user_id, as_of, "morning")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id)
+
+        exclusion = variety_exclusion_service.get_variety_exclusion_set(conn, user_id, as_of)
+
+        assert dish_id not in exclusion
+
+    def test_a_dish_served_in_a_future_generated_week_is_not_excluded(self, conn, make_user):
+        """Regression: a dish already assigned in a future week (e.g. from an earlier
+        regenerate-remaining-week call) must not exclude itself when computing an earlier day's
+        candidate pool.
+        """
+        user_id = make_user()
+        as_of = datetime.date(2026, 8, 24)
+        dish_id = _insert_dish(conn, name="Served Next Week")
+        plan = plans_repo.create_plan_day(conn, user_id, datetime.date(2026, 8, 30), "night")
+        plans_repo.add_plan_item(conn, plan.id, "poriyal", dish_id)
+
+        exclusion = variety_exclusion_service.get_variety_exclusion_set(conn, user_id, as_of)
+
+        assert dish_id not in exclusion
 
 
 class TestAvailabilityRepository:

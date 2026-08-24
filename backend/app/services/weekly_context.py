@@ -4,12 +4,13 @@ on existing data, no new functionality", plus user_profiles.nonveg_days_per_week
 nonveg_day_pattern). Feeds MP-034's candidate filtering (blocked on the catalog) with a
 deterministic, date-only computation — no catalog or LLM involvement here.
 
-Non-veg constraint rule: when nonveg_day_pattern is set (e.g. {wed, sat}), those named days are
-'required' non-veg and every other day is 'veg_only' — the pattern is precise, so days outside it
-are pinned veg by the same logic that pinned the named days non-veg. When no pattern is set,
-nonveg_days_per_week is a count-only constraint (some N days somewhere in the week) with no
-per-day answer yet, so every day is 'flexible' — which day satisfies the count is a generation-time
-decision (MP-034/038-044), not this service's job.
+Non-veg constraint rule: when nonveg_day_pattern is set (e.g. {wed, sat} — 0002_user_profile_
+favorites_schema.sql's own example uses the abbreviated form, and that's what's actually
+persisted), those named days are 'required' non-veg and every other day is 'veg_only' — the
+pattern is precise, so days outside it are pinned veg by the same logic that pinned the named days
+non-veg. When no pattern is set, nonveg_days_per_week is a count-only constraint (some N days
+somewhere in the week) with no per-day answer yet, so every day is 'flexible' — which day satisfies
+the count is a generation-time decision (MP-034/038-044), not this service's job.
 """
 
 from __future__ import annotations
@@ -19,8 +20,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.models import UserProfile
+from app.models.day_names import DAY_NAMES as _DAY_NAMES
+from app.models.day_names import normalize_day_name as _normalize_day_name
 
-_DAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _WEEKEND_WEEKDAYS = (5, 6)  # Saturday, Sunday, per datetime.date.weekday()
 
 NonvegConstraint = Literal["required", "veg_only", "flexible"]
@@ -47,7 +49,7 @@ def compute_weekly_context(profile: UserProfile, week_start: datetime.date) -> W
     constraint and prep bias from `profile`. Deterministic: same profile + week_start always
     produces the same result.
     """
-    pattern = set(profile.nonveg_day_pattern or [])
+    pattern = {_normalize_day_name(day) for day in (profile.nonveg_day_pattern or [])}
     days = tuple(
         _day_context(week_start + datetime.timedelta(days=offset), pattern) for offset in range(7)
     )

@@ -40,11 +40,60 @@ def test_missing_slot_is_rejected() -> None:
         WeeklyMenu(week_start=_WEEK_START, items=items)
 
 
-def test_duplicate_day_slot_is_rejected() -> None:
+def test_a_composed_slot_with_multiple_dishes_validates() -> None:
+    # Real lunches are composed: rice + a gravy + poriyal all under the same 'afternoon' slot.
+    # plan_items already supports multiple rows per slot — the contract has to allow it too.
     items = _full_week_items()
-    items.append(dict(items[0]))  # duplicate the first (day, slot) pair
-    with pytest.raises(ValidationError, match="duplicate"):
+    lunch_day = _WEEK_START
+    items.append(
+        {"day": lunch_day, "slot": "afternoon", "item_type": "gravy", "dish_id": str(uuid.uuid4())}
+    )
+    items.append(
+        {
+            "day": lunch_day,
+            "slot": "afternoon",
+            "item_type": "poriyal",
+            "dish_id": str(uuid.uuid4()),
+        }
+    )
+
+    menu = WeeklyMenu(week_start=_WEEK_START, items=items)
+
+    afternoon_items = [i for i in menu.items if i.day == lunch_day and i.slot == "afternoon"]
+    assert len(afternoon_items) == 3
+
+
+def test_a_partial_week_validates_the_start_today_regenerate_path() -> None:
+    # docs/MP-001: "Regenerate-remaining-week — reuses the weekly generation path with a
+    # start_date argument." Only 3 of the 7 days are present here; each of those 3 is complete.
+    partial_days = [_WEEK_START + datetime.timedelta(days=offset) for offset in (2, 3, 4)]
+    items = [
+        {"day": day, "slot": slot, "item_type": "rice", "dish_id": str(uuid.uuid4())}
+        for day in partial_days
+        for slot in _SLOTS
+    ]
+
+    menu = WeeklyMenu(week_start=_WEEK_START, items=items)
+
+    assert {i.day for i in menu.items} == set(partial_days)
+
+
+def test_a_present_day_missing_a_slot_is_still_rejected_under_partial_week() -> None:
+    partial_days = [_WEEK_START + datetime.timedelta(days=offset) for offset in (2, 3)]
+    items = [
+        {"day": day, "slot": slot, "item_type": "rice", "dish_id": str(uuid.uuid4())}
+        for day in partial_days
+        for slot in _SLOTS
+    ]
+    items.pop()  # drop one slot from the last present day
+
+    with pytest.raises(ValidationError, match="missing"):
         WeeklyMenu(week_start=_WEEK_START, items=items)
+
+
+def test_empty_items_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        WeeklyMenu(week_start=_WEEK_START, items=[])
 
 
 def test_entry_outside_the_target_week_is_rejected() -> None:

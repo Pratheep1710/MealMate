@@ -22,10 +22,11 @@ def get_variety_exclusion_set(
     conn: psycopg.Connection[DictRow], user_id: uuid.UUID, as_of: datetime.date
 ) -> set[uuid.UUID]:
     """Dish ids to exclude from `as_of`'s candidate pool: track_variety dishes served in the prior
-    ten days [as_of - 10, as_of - 1] (exactly ten days ago is still excluded; eleven is not),
-    minus the user's favorites.
+    ten days [as_of - 10, as_of - 1] (exactly ten days ago is still excluded; eleven is not, and so
+    is `as_of` itself or anything after it — today's or a future generated week's own assignments
+    must never exclude themselves), minus the user's favorites.
     """
     since = as_of - datetime.timedelta(days=_WINDOW_DAYS)
-    recent = history_repo.get_recent_variety_dish_ids(conn, user_id, since)
+    recent = history_repo.get_recent_variety_dish_ids(conn, user_id, since, as_of)
     favorites = set(profiles_repo.list_favorite_dish_ids(conn, user_id))
     return set(recent) - favorites
