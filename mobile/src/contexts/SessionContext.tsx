@@ -2,6 +2,7 @@ import type { Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { supabase } from '../lib/supabase';
+import { clearAllCache } from '../lib/weekCache';
 
 type SessionContextValue = {
   session: Session | null;
@@ -10,6 +11,14 @@ type SessionContextValue = {
   // sign-in screen for a user who's actually already authenticated.
   initializing: boolean;
   signInWithPassword: (email: string, password: string) => Promise<{ error: string | null }>;
+  // `needsConfirmation` distinguishes "account created, session started immediately" from "check
+  // your email to confirm" — which of those happens depends on the Supabase project's email
+  // confirmation setting, not on anything the client controls: a signed-in `data.session` on the
+  // response means the project auto-confirms, its absence means a confirmation email was sent.
+  signUp: (
+    email: string,
+    password: string,
+  ) => Promise<{ error: string | null; needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
 };
 
@@ -45,8 +54,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         return { error: error?.message ?? null };
       },
+      signUp: async (email: string, password: string) => {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        return { error: error?.message ?? null, needsConfirmation: !error && !data.session };
+      },
       signOut: async () => {
         await supabase.auth.signOut();
+        // Prevents the next sign-in on this device (a different account) from ever reading this
+        // account's cached offline data — see weekCache.ts.
+        await clearAllCache();
       },
     }),
     [session, initializing],

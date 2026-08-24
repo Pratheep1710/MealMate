@@ -1,10 +1,12 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
+import { ListTabIcon, PersonTabIcon, WeekTabIcon } from '../components/icons';
 import { DayReviewEditScreen } from '../screens/DayReviewEditScreen';
-import { PlaceholderScreen } from '../screens/PlaceholderScreen';
+import { GroceryListScreen } from '../screens/GroceryListScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { WeekPlanScreen } from '../screens/WeekPlanScreen';
+import { colors } from '../theme/tokens';
 import type {
   GroceryStackParamList,
   MainTabParamList,
@@ -30,15 +32,6 @@ function PlanStackNavigator() {
   );
 }
 
-function GroceryListScreen() {
-  return (
-    <PlaceholderScreen
-      title="Grocery list"
-      note="Auto-generated weekly list lands in a later phase (M5)."
-    />
-  );
-}
-
 function GroceryStackNavigator() {
   return (
     <GroceryStack.Navigator>
@@ -61,13 +54,37 @@ function SettingsStackNavigator() {
 
 export function MainTabNavigator() {
   return (
-    <Tab.Navigator screenOptions={{ headerShown: false }}>
-      <Tab.Screen name="Plan" component={PlanStackNavigator} />
-      <Tab.Screen name="Grocery" component={GroceryStackNavigator} />
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: colors.leaf,
+        tabBarInactiveTintColor: colors.textFaint,
+        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
+      }}
+    >
+      <Tab.Screen
+        name="Plan"
+        component={PlanStackNavigator}
+        options={{
+          title: 'Week',
+          tabBarIcon: ({ color, size }) => <WeekTabIcon size={size} color={color} />,
+        }}
+      />
+      <Tab.Screen
+        name="Grocery"
+        component={GroceryStackNavigator}
+        options={{
+          title: 'List',
+          tabBarIcon: ({ color, size }) => <ListTabIcon size={size} color={color} />,
+        }}
+      />
       <Tab.Screen
         name="SettingsTab"
         component={SettingsStackNavigator}
-        options={{ title: 'Settings' }}
+        options={{
+          title: 'You',
+          tabBarIcon: ({ color, size }) => <PersonTabIcon size={size} color={color} />,
+        }}
       />
     </Tab.Navigator>
   );

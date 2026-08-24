@@ -14,3 +14,22 @@ jest.mock('expo-constants', () => ({
     },
   },
 }));
+
+// Font loading is a real native asset fetch (expo-font -> expo-asset), which the Jest environment
+// has no device to perform. Reporting "loaded" immediately keeps App's useFonts gate from hanging
+// tests forever waiting on a load that can never happen here — no test in this repo asserts on the
+// actual rendered glyphs, only on text content and structure.
+jest.mock('expo-font', () => ({
+  useFonts: () => [true],
+  loadAsync: () => Promise.resolve(),
+  isLoaded: () => true,
+}));
+
+jest.mock('expo-splash-screen', () => ({
+  preventAutoHideAsync: () => Promise.resolve(),
+  hideAsync: () => Promise.resolve(),
+}));
+
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);

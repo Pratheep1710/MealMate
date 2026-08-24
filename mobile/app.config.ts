@@ -34,6 +34,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     web: {
       favicon: './assets/favicon.png',
     },
+    plugins: ['expo-asset', 'expo-font', 'expo-splash-screen'],
     extra: {
       supabaseUrl: clientConfig.supabaseUrl,
       supabaseAnonKey: clientConfig.supabaseAnonKey,

@@ -35,7 +35,11 @@ def test_repositories_modules_import_and_expose_functions():
             "set_available_ingredients",
         ],
         "app.repositories.plans": ["get_week_plan", "write_grocery_snapshot"],
-        "app.repositories.jobs": ["claim_or_create_job", "update_job_status"],
+        "app.repositories.jobs": [
+            "claim_or_create_job",
+            "try_start_processing",
+            "update_job_status",
+        ],
         "app.repositories.notifications": ["upsert_pending", "mark_status"],
     }.items():
         module = importlib.import_module(module_name)
@@ -48,6 +52,26 @@ def test_repositories_modules_import_and_expose_functions():
 def test_services_package_imports():
     module = importlib.import_module("app.services.notification_slo")
     assert callable(module.compute_daily_reminder_slo)
+
+
+def test_phase3_services_import():
+    for module_name, expected_functions in {
+        "app.services.planning_trigger": ["compute_trigger"],
+        "app.services.generation_claim": ["claim_job"],
+        "app.services.variety_exclusion": ["get_variety_exclusion_set"],
+        "app.services.weekly_context": ["compute_weekly_context"],
+    }.items():
+        module = importlib.import_module(module_name)
+        for fn in expected_functions:
+            assert callable(getattr(module, fn, None)), (
+                f"{module_name}.{fn} missing or not callable"
+            )
+
+
+def test_weekly_menu_schema_imports():
+    module = importlib.import_module("app.schemas.weekly_menu")
+    assert module.WeeklyMenu is not None
+    assert module.WeeklyMenuItem is not None
 
 
 def test_jobs_package_imports():

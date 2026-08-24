@@ -10,6 +10,7 @@ const mockSession = {
 
 let mockAuthStateCallback: ((event: string, session: unknown) => void) | undefined;
 const mockSignInWithPassword = jest.fn();
+const mockSignUp = jest.fn();
 const mockSignOut = jest.fn();
 const mockGetSession = jest.fn();
 const mockUnsubscribe = jest.fn();
@@ -19,6 +20,7 @@ jest.mock('../../lib/supabase', () => ({
     auth: {
       getSession: (...args: unknown[]) => mockGetSession(...args),
       signInWithPassword: (...args: unknown[]) => mockSignInWithPassword(...args),
+      signUp: (...args: unknown[]) => mockSignUp(...args),
       signOut: (...args: unknown[]) => mockSignOut(...args),
       onAuthStateChange: (cb: (event: string, session: unknown) => void) => {
         mockAuthStateCallback = cb;
@@ -133,6 +135,43 @@ describe('SessionProvider', () => {
       password: 'wrong-password',
     });
     expect(result.error).toBe('Invalid credentials');
+  });
+
+  it('signUp reports needsConfirmation when the project requires email confirmation', async () => {
+    mockSignUp.mockResolvedValue({ data: { session: null }, error: null });
+    const rendered = renderSession();
+    await rendered.mount();
+
+    const result = await rendered.current().signUp('new@example.com', 'a-strong-password');
+
+    expect(mockSignUp).toHaveBeenCalledWith({
+      email: 'new@example.com',
+      password: 'a-strong-password',
+    });
+    expect(result).toEqual({ error: null, needsConfirmation: true });
+  });
+
+  it('signUp reports no confirmation needed when the project auto-confirms and starts a session', async () => {
+    mockSignUp.mockResolvedValue({ data: { session: mockSession }, error: null });
+    const rendered = renderSession();
+    await rendered.mount();
+
+    const result = await rendered.current().signUp('new@example.com', 'a-strong-password');
+
+    expect(result).toEqual({ error: null, needsConfirmation: false });
+  });
+
+  it('signUp surfaces an error message and does not claim confirmation is needed', async () => {
+    mockSignUp.mockResolvedValue({
+      data: { session: null },
+      error: { message: 'Email already registered' },
+    });
+    const rendered = renderSession();
+    await rendered.mount();
+
+    const result = await rendered.current().signUp('taken@example.com', 'a-strong-password');
+
+    expect(result).toEqual({ error: 'Email already registered', needsConfirmation: false });
   });
 
   it('signOut delegates to supabase', async () => {
