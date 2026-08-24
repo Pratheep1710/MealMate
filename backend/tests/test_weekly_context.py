@@ -7,6 +7,9 @@ from __future__ import annotations
 import datetime
 import uuid
 
+import pytest
+from pydantic import ValidationError
+
 from app.models import UserProfile
 from app.services.weekly_context import compute_weekly_context
 
@@ -72,19 +75,23 @@ def test_pattern_normalization_is_case_insensitive() -> None:
     assert by_name["wednesday"] == "required"
 
 
-def test_pattern_and_count_disagreeing_still_produces_a_deterministic_pattern_driven_result() -> (
+def test_a_profile_with_disagreeing_count_and_pattern_cannot_be_constructed() -> None:
+    # UserProfile itself rejects this combination (app/models/profile.py) — nonveg_days_per_week=5
+    # with a 1-day pattern would otherwise let compute_weekly_context return a WeeklyContext whose
+    # nonveg_days_per_week (5) contradicts its own required-day count (1), which no downstream
+    # generator or validator could satisfy.
+    with pytest.raises(ValidationError, match="nonveg_days_per_week"):
+        _profile(nonveg_days_per_week=5, nonveg_day_pattern=["wed"])
+
+
+def test_the_required_day_count_always_matches_nonveg_days_per_week_when_a_pattern_is_set() -> (
     None
 ):
-    # nonveg_days_per_week and the pattern's length aren't cross-validated against each other here
-    # (that's a data-entry concern, not this computation's) — the pattern is authoritative for the
-    # per-day answer regardless of what the count says.
-    profile = _profile(nonveg_days_per_week=5, nonveg_day_pattern=["wed"])
+    profile = _profile(nonveg_days_per_week=2, nonveg_day_pattern=["wed", "sat"])
     context = compute_weekly_context(profile, _WEEK_START)
 
-    by_name = {day.day_name: day.nonveg_constraint for day in context.days}
-    assert by_name["wednesday"] == "required"
-    assert sum(1 for day in context.days if day.nonveg_constraint == "required") == 1
-    assert context.nonveg_days_per_week == 5
+    required_count = sum(1 for day in context.days if day.nonveg_constraint == "required")
+    assert required_count == context.nonveg_days_per_week
 
 
 def test_no_pattern_leaves_every_day_flexible() -> None:

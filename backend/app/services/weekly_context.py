@@ -20,25 +20,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.models import UserProfile
+from app.models.day_names import DAY_NAMES as _DAY_NAMES
+from app.models.day_names import normalize_day_name as _normalize_day_name
 
-_DAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _WEEKEND_WEEKDAYS = (5, 6)  # Saturday, Sunday, per datetime.date.weekday()
-
-# The persisted column stores abbreviated day names ("wed", "sat" — see the migration comment
-# above), but this module computes full names from date.weekday(). Comparing the two forms
-# directly always misses, silently degrading every pattern to "no pattern set" (every day
-# 'veg_only' instead of the intended 'required' days) — normalize both representations to the
-# full name before comparing.
-_DAY_ABBREVIATIONS = {name[:3]: name for name in _DAY_NAMES}
-
-
-def _normalize_day_name(value: str) -> str:
-    normalized = value.strip().lower()
-    if normalized in _DAY_NAMES:
-        return normalized
-    if normalized in _DAY_ABBREVIATIONS:
-        return _DAY_ABBREVIATIONS[normalized]
-    raise ValueError(f"unrecognized day name in nonveg_day_pattern: {value!r}")
 
 NonvegConstraint = Literal["required", "veg_only", "flexible"]
 PrepBias = Literal["quick", "flexible"]
