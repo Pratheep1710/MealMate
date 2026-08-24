@@ -273,7 +273,7 @@ describe('WeekPlanScreen', () => {
     ]);
   });
 
-  it('never shows user A\'s cached plan when user B goes offline on the same device', async () => {
+  it("never shows user A's cached plan when user B goes offline on the same device", async () => {
     mockUseSession.mockReturnValue({ session: { user: { id: 'user-a' } } });
     mockFrom.mockReturnValue(chainable({ data: [todayRow()], error: null }));
 

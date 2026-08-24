@@ -157,7 +157,9 @@ export function WeekPlanScreen() {
   }
 
   const plansByKey = byPlansMap(view.plans);
-  const todayRows = CHRONOLOGICAL_SLOTS.map((slot) => plansByKey.get(slotKey(days[0].iso, slot)) ?? null);
+  const todayRows = CHRONOLOGICAL_SLOTS.map(
+    (slot) => plansByKey.get(slotKey(days[0].iso, slot)) ?? null,
+  );
   const todayHasAnyPlan = todayRows.some((row) => row !== null);
 
   return (
