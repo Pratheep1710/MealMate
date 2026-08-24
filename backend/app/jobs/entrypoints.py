@@ -32,7 +32,8 @@ def run_daily_reminder_dispatch(
 ) -> NotificationLog:
     """Claims (or returns the existing) notification_log row for this (user, day) — idempotent per
     the table's unique constraint — under correlation-scoped logging. The actual Expo push send
-    (outbox ticket dispatch, docs/MP-001 "Core") is M6 scope; this stops at a claimed 'pending' row.
+    (outbox ticket dispatch, docs/MP-001 "Core") is M6 scope — see should_send_reminder below and
+    backend/scripts/run_daily_reminder.py, this phase's implementation of that scope.
     """
     with correlation_context(user_id=str(user_id), correlation_id=target_date.isoformat()):
         notification = notifications_repo.upsert_pending(
@@ -44,3 +45,14 @@ def run_daily_reminder_dispatch(
             status=notification.status,
         )
         return notification
+
+
+def should_send_reminder(notification: NotificationLog) -> bool:
+    """Whether a claimed notification_log row is still worth sending: not if it already went out
+    (`sent`/`delivered` — the claim's idempotency already prevents a duplicate row, this is the
+    parallel guard against a duplicate *send* if the job is invoked twice), and not if it has
+    already used up docs/MP-001's "one same-day retry" budget (one original attempt + one retry).
+    """
+    if notification.status in ("sent", "delivered"):
+        return False
+    return not (notification.status == "failed" and notification.attempt >= 2)

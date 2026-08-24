@@ -127,6 +127,31 @@ export function WeekPlanScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // MP-061: skip/eating-out toggle. 0012_meal_plans_skip_toggle_rls.sql grants the owning user a
+  // direct write to this one column, matching the rest of this app's "every edit autosaves and is
+  // immediately live" edit model (docs/MP-001) — no approval step, no confirmation dialog here
+  // either, same as the rest of this screen's low-pressure framing.
+  const toggleSkip = async (planId: string, nextSkipped: boolean) => {
+    if (view.kind !== 'ready') {
+      return;
+    }
+    const nextPlans = view.plans.map((row) =>
+      row.id === planId ? { ...row, is_skipped: nextSkipped } : row,
+    );
+    setView({ kind: 'ready', plans: nextPlans });
+    await saveCache(CACHE_KEY, nextPlans);
+
+    const { error } = await supabase
+      .from('meal_plans')
+      .update({ is_skipped: nextSkipped })
+      .eq('id', planId);
+    if (error) {
+      // Revert the optimistic update — the write didn't actually take.
+      setView({ kind: 'ready', plans: view.plans });
+      await saveCache(CACHE_KEY, view.plans);
+    }
+  };
+
   if (view.kind === 'loading') {
     return (
       <ScrollView contentContainerStyle={styles.scroll} testID="week-plan-loading">
@@ -197,6 +222,7 @@ export function WeekPlanScreen() {
           slotSheet ? (plansByKey.get(slotKey(slotSheet.day.iso, slotSheet.slot)) ?? null) : null
         }
         onClose={() => setSlotSheet(null)}
+        onToggleSkip={toggleSkip}
       />
       <InfoSheet visible={infoSheetOpen} onClose={() => setInfoSheetOpen(false)} />
     </View>
@@ -380,10 +406,12 @@ function SlotDetailSheet({
   target,
   row,
   onClose,
+  onToggleSkip,
 }: {
   target: { day: RollingDay; slot: Slot } | null;
   row: MealPlanRow | null;
   onClose: () => void;
+  onToggleSkip: (planId: string, nextSkipped: boolean) => void;
 }) {
   const visible = !!target;
   const meta = target ? SLOT_META[target.slot] : null;
@@ -400,7 +428,25 @@ function SlotDetailSheet({
           <Text style={styles.sheetTitle}>
             {skipped ? 'Cooking something of your own' : (line ?? 'Nothing planned yet')}
           </Text>
-          <Text style={styles.sheetNote}>Swapping opens up once the dish list is ready.</Text>
+          <Text style={styles.sheetNote}>
+            {skipped
+              ? "Marked as your own for today — doesn't count toward the grocery list."
+              : 'Swapping opens up once the dish list is ready.'}
+          </Text>
+          {row && (
+            // MP-061: no confirmation dialog, no warning color either direction — same tap-and-
+            // done friction as accepting a suggestion (Phase 4 brief §1).
+            <TouchableOpacity
+              style={styles.skipToggleButton}
+              onPress={() => onToggleSkip(row.id, !skipped)}
+              testID="skip-toggle-button"
+              accessibilityRole="button"
+            >
+              <Text style={styles.sheetSecondaryButtonLabel}>
+                {skipped ? 'Actually, cooking this' : 'Cooking something else'}
+              </Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.sheetPrimaryButton} onPress={onClose}>
             <Text style={styles.sheetPrimaryButtonLabel}>Close</Text>
           </TouchableOpacity>
@@ -776,6 +822,14 @@ const styles = StyleSheet.create({
     minHeight: MIN_TAP_TARGET,
     borderRadius: radii.md,
     backgroundColor: colors.accentTintHover,
+  },
+  skipToggleButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: MIN_TAP_TARGET,
+    borderRadius: radii.md,
+    backgroundColor: colors.accentTintHover,
+    marginBottom: spacing.sm,
   },
   sheetSecondaryButtonLabel: {
     fontFamily: fonts.bodyRegular,

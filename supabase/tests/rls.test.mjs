@@ -166,6 +166,94 @@ describe('meal_plans / plan_items', () => {
     const check = await db.query(`select make_extra from plan_items where plan_id = $1`, [planA]);
     expect(check.rows[0].make_extra).toBe(true);
   });
+
+  // MP-061: skip/eating-out toggle write path (0012_meal_plans_skip_toggle_rls.sql).
+  it('own meal_plans row: can toggle is_skipped', async () => {
+    await asUser(db, USER_A);
+    await db.query(`update meal_plans set is_skipped = true where id = $1`, [planA]);
+    const check = await db.query(`select is_skipped from meal_plans where id = $1`, [planA]);
+    expect(check.rows[0].is_skipped).toBe(true);
+  });
+
+  it("cannot toggle another user's is_skipped", async () => {
+    await asUser(db, USER_B);
+    const result = await db.query(`update meal_plans set is_skipped = true where id = $1`, [planA]);
+    expect(result.affectedRows ?? 0).toBe(0);
+
+    await reset(db);
+    await asServiceRole(db);
+    const check = await db.query(`select is_skipped from meal_plans where id = $1`, [planA]);
+    expect(check.rows[0].is_skipped).toBe(false);
+  });
+
+  it('the is_skipped grant does not extend to other meal_plans columns', async () => {
+    await asUser(db, USER_A);
+    await expect(
+      db.query(`update meal_plans set slot = 'night' where id = $1`, [planA])
+    ).rejects.toThrow();
+  });
+});
+
+describe('push_tokens — own rows only via SELECT, all writes go through register_push_token', () => {
+  it('a user can register their own push token via the RPC', async () => {
+    await asUser(db, USER_A);
+    await db.query(`select register_push_token('ExponentPushToken[aaa]')`);
+
+    const res = await db.query(`select * from push_tokens where user_id = $1`, [USER_A]);
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0].expo_push_token).toBe('ExponentPushToken[aaa]');
+  });
+
+  it("the RPC always registers to the caller's own auth.uid(), never an argument", async () => {
+    // register_push_token(text) takes no user id argument at all — auth.uid() is read
+    // server-side inside the security-definer function, so there's nothing for a caller to lie
+    // about the way a direct `insert ... values (user_id, ...)` would let them.
+    await asUser(db, USER_A);
+    await db.query(`select register_push_token('ExponentPushToken[bbb]')`);
+
+    const res = await db.query(`select user_id from push_tokens where expo_push_token = 'ExponentPushToken[bbb]'`);
+    expect(res.rows[0].user_id).toBe(USER_A);
+  });
+
+  it('direct inserts/updates from authenticated are denied — the RPC is the only write path', async () => {
+    await asUser(db, USER_A);
+    await expect(
+      db.query(`insert into push_tokens (user_id, expo_push_token) values ($1, 'ExponentPushToken[ccc]')`, [
+        USER_A,
+      ])
+    ).rejects.toThrow();
+  });
+
+  it("other user's token rows are invisible", async () => {
+    await asUser(db, USER_A);
+    await db.query(`select register_push_token('ExponentPushToken[ddd]')`);
+    await reset(db);
+
+    await asUser(db, USER_B);
+    const res = await db.query(`select * from push_tokens where user_id = $1`, [USER_A]);
+    expect(res.rows).toHaveLength(0);
+  });
+
+  it('a device handed off to a different account reassigns the same token row', async () => {
+    await asUser(db, USER_A);
+    await db.query(`select register_push_token('ExponentPushToken[eee]')`);
+    await reset(db);
+
+    // USER_B signs in on the same device and registers the same token value.
+    await asUser(db, USER_B);
+    await db.query(`select register_push_token('ExponentPushToken[eee]')`);
+    await reset(db);
+
+    await asServiceRole(db);
+    const res = await db.query(`select user_id from push_tokens where expo_push_token = 'ExponentPushToken[eee]'`);
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0].user_id).toBe(USER_B);
+  });
+
+  it('anon cannot call the registration RPC', async () => {
+    await asAnon(db);
+    await expect(db.query(`select register_push_token('ExponentPushToken[fff]')`)).rejects.toThrow();
+  });
 });
 
 describe('generation_jobs / notification_log — read-only to owner, no cross-user leak', () => {
