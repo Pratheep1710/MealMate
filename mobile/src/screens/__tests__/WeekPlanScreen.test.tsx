@@ -1,41 +1,36 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { act, create } from 'react-test-renderer';
 
-import { currentWeekStart, weekDates } from '../../lib/week';
 import type { PlanStackParamList } from '../../navigation/types';
+import { rollingDays } from '../weekPlan/rollingDays';
 import { WeekPlanScreen } from '../WeekPlanScreen';
 
-const dates = weekDates(currentWeekStart(new Date()));
-const monday = dates[0];
+const days = rollingDays(new Date());
+const today = days[0].iso;
 
 const mockFrom = jest.fn();
-const mockNavigate = jest.fn();
 
 jest.mock('../../lib/supabase', () => ({
   supabase: { from: (...args: unknown[]) => mockFrom(...args) },
 }));
-
-jest.mock('@react-navigation/native', () => {
-  const actual = jest.requireActual('@react-navigation/native');
-  return {
-    ...actual,
-    useNavigation: () => ({ navigate: mockNavigate }),
-  };
-});
 
 function chainable(result: { data: unknown; error: unknown }) {
   const builder: Record<string, unknown> = {};
   for (const method of ['select', 'gte', 'lte', 'eq', 'in', 'order']) {
     builder[method] = jest.fn(() => builder);
   }
-  builder.maybeSingle = jest.fn(() => Promise.resolve(result));
   builder.then = (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
     Promise.resolve(result).then(resolve, reject);
   return builder;
 }
 
 const Stack = createNativeStackNavigator<PlanStackParamList>();
+
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 async function renderScreen() {
   let tree: ReturnType<typeof create>;
@@ -47,6 +42,8 @@ async function renderScreen() {
         </Stack.Navigator>
       </NavigationContainer>,
     );
+    await flushAsync();
+    await flushAsync();
   });
   return tree!;
 }
@@ -55,50 +52,55 @@ function textOf(tree: ReturnType<typeof create>): string {
   return JSON.stringify(tree.toJSON());
 }
 
-beforeEach(() => {
+// findAllByProps's built-in traversal hits react-navigation's default (unprovided) context getters
+// somewhere in this tree shape and throws; a manual predicate walk sidesteps it. Filtered to host
+// (string-typed) nodes only — the composite View wrapping each host node also carries the same
+// testID prop and would otherwise be double-counted.
+function countByTestId(tree: ReturnType<typeof create>, testId: string): number {
+  return tree.root.findAll((node) => typeof node.type === 'string' && node.props.testID === testId)
+    .length;
+}
+
+function todayRow(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 'plan-1',
+    plan_date: today,
+    slot: 'night',
+    is_skipped: false,
+    plan_items: [
+      {
+        id: 'item-1',
+        item_type: 'rice',
+        status: 'filled',
+        make_extra: false,
+        dishes: { name: 'Sambar Sadam' },
+      },
+    ],
+    ...overrides,
+  };
+}
+
+beforeEach(async () => {
   jest.clearAllMocks();
+  await AsyncStorage.clear();
 });
 
 describe('WeekPlanScreen', () => {
-  it('renders a filled slot with the dish name from a real RLS-scoped read', async () => {
-    mockFrom.mockReturnValue(
-      chainable({
-        data: [
-          {
-            id: 'plan-1',
-            plan_date: monday,
-            slot: 'night',
-            is_skipped: false,
-            plan_items: [
-              {
-                id: 'item-1',
-                item_type: 'rice',
-                status: 'filled',
-                make_extra: false,
-                dishes: { name: 'Sambar Sadam' },
-              },
-            ],
-          },
-        ],
-        error: null,
-      }),
-    );
+  it('renders a filled slot with the real dish name', async () => {
+    mockFrom.mockReturnValue(chainable({ data: [todayRow()], error: null }));
 
     const tree = await renderScreen();
 
     expect(mockFrom).toHaveBeenCalledWith('meal_plans');
     expect(textOf(tree)).toContain('Sambar Sadam');
+    expect(textOf(tree)).toContain('Today');
   });
 
-  it('shows "Needs manual pick" for a needs_manual_pick item instead of a blank slot', async () => {
+  it('shows "Needs a pick" for a needs_manual_pick item', async () => {
     mockFrom.mockReturnValue(
       chainable({
         data: [
-          {
-            id: 'plan-1',
-            plan_date: monday,
-            slot: 'night',
-            is_skipped: false,
+          todayRow({
             plan_items: [
               {
                 id: 'item-1',
@@ -108,7 +110,7 @@ describe('WeekPlanScreen', () => {
                 dishes: null,
               },
             ],
-          },
+          }),
         ],
         error: null,
       }),
@@ -116,58 +118,46 @@ describe('WeekPlanScreen', () => {
 
     const tree = await renderScreen();
 
-    expect(textOf(tree)).toContain('Needs manual pick');
+    expect(textOf(tree)).toContain('Needs a pick');
   });
 
-  it('shows Skipped for a day marked is_skipped', async () => {
+  it('reads a skipped day as calm, not a warning', async () => {
     mockFrom.mockReturnValue(
-      chainable({
-        data: [
-          { id: 'plan-1', plan_date: monday, slot: 'night', is_skipped: true, plan_items: [] },
-        ],
-        error: null,
-      }),
+      chainable({ data: [todayRow({ is_skipped: true, plan_items: [] })], error: null }),
     );
 
     const tree = await renderScreen();
 
-    expect(textOf(tree)).toContain('Skipped');
+    expect(textOf(tree)).toContain('Cooking something of your own');
+    expect(textOf(tree)).toContain('your call');
   });
 
-  it('shows an empty state when the week has no plan yet, not a broken grid', async () => {
+  it('shows the still-cooking skeleton state when today has no plan yet', async () => {
     mockFrom.mockReturnValue(chainable({ data: [], error: null }));
 
     const tree = await renderScreen();
 
-    expect(textOf(tree)).toContain('No plan yet for this week');
+    expect(textOf(tree)).toContain('Putting today together');
+    expect(countByTestId(tree, 'today-skeleton')).toBe(1);
   });
 
-  it('surfaces a query error instead of silently showing an empty week', async () => {
-    mockFrom.mockReturnValue(
-      chainable({ data: null, error: { message: 'permission denied for table meal_plans' } }),
-    );
-
-    const tree = await renderScreen();
-
-    expect(textOf(tree)).toContain('permission denied for table meal_plans');
-  });
-
-  it("navigates to DayReviewEdit with the pressed day's date", async () => {
+  it('composes rest-of-week rows from real plan items', async () => {
+    const tomorrow = days[1].iso;
     mockFrom.mockReturnValue(
       chainable({
         data: [
           {
-            id: 'plan-1',
-            plan_date: monday,
-            slot: 'night',
+            id: 'plan-2',
+            plan_date: tomorrow,
+            slot: 'morning',
             is_skipped: false,
             plan_items: [
               {
-                id: 'item-1',
-                item_type: 'rice',
+                id: 'item-2',
+                item_type: 'tiffin',
                 status: 'filled',
                 make_extra: false,
-                dishes: { name: 'Sambar Sadam' },
+                dishes: { name: 'Idli' },
               },
             ],
           },
@@ -177,11 +167,44 @@ describe('WeekPlanScreen', () => {
     );
 
     const tree = await renderScreen();
-    const reviewButton = tree.root.findByProps({ testID: `week-plan-review-${monday}` });
+
+    expect(countByTestId(tree, `rest-of-week-${tomorrow}`)).toBe(1);
+    expect(textOf(tree)).toContain('Idli');
+  });
+
+  it('opens a calm, inert detail sheet when a slot is tapped — no fake edit options', async () => {
+    mockFrom.mockReturnValue(chainable({ data: [todayRow()], error: null }));
+
+    const tree = await renderScreen();
+    const slotRow = tree.root.findByProps({ testID: 'slot-row-night' });
     await act(async () => {
-      reviewButton.props.onPress();
+      slotRow.props.onPress();
     });
 
-    expect(mockNavigate).toHaveBeenCalledWith('DayReviewEdit', { planDate: monday });
+    expect(textOf(tree)).toContain('Swapping opens up once the dish list is ready.');
+  });
+
+  it('opens a calm, inert info sheet from "New ideas" — no scope picker that leads nowhere', async () => {
+    mockFrom.mockReturnValue(chainable({ data: [todayRow()], error: null }));
+
+    const tree = await renderScreen();
+    const pill = tree.root.findByProps({ testID: 'new-ideas-pill' });
+    await act(async () => {
+      pill.props.onPress();
+    });
+
+    expect(textOf(tree)).toContain(
+      'Once the dish list is ready, this will find something new for you.',
+    );
+  });
+
+  it('falls back to a bare error state when the fetch fails and there is no cache', async () => {
+    mockFrom.mockReturnValue(
+      chainable({ data: null, error: { message: 'permission denied for table meal_plans' } }),
+    );
+
+    const tree = await renderScreen();
+
+    expect(textOf(tree)).toContain("Couldn't load your plan");
   });
 });
