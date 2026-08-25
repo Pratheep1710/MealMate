@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "817427147054",
+    "project_id": "mealplanner-77418",
+    "storage_bucket": "mealplanner-77418.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:817427147054:android:5666786c79fe54380f72bf",
+        "android_client_info": {
+          "package_name": "com.pratheeplabss.mealplanner"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD--ZH6qthH6DBayeaQIOe5slMH32jpIY4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
