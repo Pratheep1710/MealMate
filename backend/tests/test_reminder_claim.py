@@ -107,6 +107,17 @@ def test_claim_reminder_under_a_real_race_only_one_caller_wins(
     for thread in threads:
         thread.join()
 
-    winners = [r for r in results if r is not None]
-    assert len(winners) == 1
-    assert winners[0].status == "processing"
+    try:
+        winners = [r for r in results if r is not None]
+        assert len(winners) == 1
+        assert winners[0].status == "processing"
+    finally:
+        # autocommit connections bypass the `conn` fixture's rollback teardown, so this row
+        # would otherwise persist for the rest of the pytest session (pg_dsn is session-scoped)
+        # — list_for_target_date's (type, date) scoping isn't user-scoped, so a leftover row
+        # here previously inflated test_list_for_target_date_scopes_by_type_and_date's count.
+        with psycopg.connect(**pg_dsn, autocommit=True, row_factory=dict_row) as cleanup_conn:
+            cleanup_conn.execute(
+                "delete from notification_log where user_id = %s and target_date = %s",
+                (user_id, target_date),
+            )
