@@ -7,9 +7,9 @@ connection, same shape as backend/scripts/provision_ci_test_users.py.
 For every user with at least one registered device (app/repositories/push_tokens.py): reads
 tomorrow's *current* plan (post-edit/post-skip — app/repositories/plans.py's
 get_day_plan_with_dishes), composes the "idea, not plan" copy (app/services/reminder_copy.py),
-claims the notification_log row (app/jobs/entrypoints.py's run_daily_reminder_dispatch, idempotent),
-and sends via Expo (app/services/push_dispatch.py) if app/jobs/entrypoints.py's
-should_send_reminder says it's still worth sending.
+and atomically claims the notification_log row (app/services/reminder_claim.py) before sending via
+Expo (app/services/push_dispatch.py) — the claim is what lets two overlapping runs (scheduled +
+manual, or two retried Actions jobs) coexist without both sending the same reminder.
 
 Usage:
   cd backend && python scripts/run_daily_reminder.py
@@ -25,12 +25,12 @@ import httpx
 
 from app.config import ConfigError, load_config
 from app.db import connect
-from app.jobs.entrypoints import run_daily_reminder_dispatch, should_send_reminder
 from app.logging import get_logger
 from app.repositories import notifications as notifications_repo
 from app.repositories import plans as plans_repo
 from app.repositories import push_tokens as push_tokens_repo
 from app.services.push_dispatch import PushSendError, send_expo_push
+from app.services.reminder_claim import claim_reminder
 from app.services.reminder_copy import compose_reminder
 
 logger = get_logger(__name__)
@@ -70,8 +70,9 @@ def main() -> int:
                 continue
             title, body = composed
 
-            notification = run_daily_reminder_dispatch(conn, user_id, target_date)
-            if not should_send_reminder(notification):
+            notification = claim_reminder(conn, user_id, target_date)
+            conn.commit()  # release the 'processing' claim's row lock before the Expo HTTP call
+            if notification is None:
                 skipped += 1
                 continue
 
@@ -89,7 +90,7 @@ def main() -> int:
 
             # One attempt per run regardless of device count — a multi-device user's second and
             # third sends aren't retries of a failure, so they shouldn't consume the "one same-day
-            # retry" budget should_send_reminder enforces.
+            # retry" budget notifications_repo.try_claim enforces.
             if last_ticket_id is not None:
                 notifications_repo.mark_status(
                     conn,

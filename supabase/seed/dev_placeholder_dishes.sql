@@ -153,59 +153,76 @@ begin
 
   for row_data in
     select * from (values
+      -- MP-061 review fix: all six slots (morning, snack_1, afternoon, snack_2, night, snack_3 —
+      -- WeekPlanScreen's CHRONOLOGICAL_SLOTS order) populated every day, not just four, so MP-027
+      -- is verified against a representative full day rather than one with gaps.
       (0, 'morning',   'tiffin',  'Idli'),
       (0, 'morning',   'gravy',   'Sambar'),
+      (0, 'snack_1',   'snack',   'Murukku'),
       (0, 'afternoon', 'rice',    'Steamed Rice'),
       (0, 'afternoon', 'gravy',   'Kara Kuzhambu'),
       (0, 'afternoon', 'poriyal', 'Beans Poriyal'),
+      (0, 'snack_2',   'sweet',   'Semiya Payasam'),
       (0, 'night',     'curd',    'Curd Rice'),
-      (0, 'snack_1',   'snack',   'Murukku'),
+      (0, 'snack_3',   'snack',   'Murukku'),
 
       (1, 'morning',   'tiffin',  'Plain Dosa'),
       (1, 'morning',   'gravy',   'Rasam'),
+      (1, 'snack_1',   'snack',   'Murukku'),
       (1, 'afternoon', 'rice',    'Steamed Rice'),
       (1, 'afternoon', 'gravy',   'Chicken Chettinad'),
       (1, 'afternoon', 'poriyal', 'Cabbage Poriyal'),
-      (1, 'night',     'rice',    'Lemon Rice'),
       (1, 'snack_2',   'sweet',   'Semiya Payasam'),
+      (1, 'night',     'rice',    'Lemon Rice'),
+      (1, 'snack_3',   'snack',   'Murukku'),
 
       (2, 'morning',   'tiffin',  'Ven Pongal'),
       (2, 'morning',   'gravy',   'Sambar'),
+      (2, 'snack_1',   'snack',   'Murukku'),
       (2, 'afternoon', 'rice',    'Steamed Rice'),
       (2, 'afternoon', 'kootu',   'Mixed Veg Kootu'),
       (2, 'afternoon', 'poriyal', 'Carrot Poriyal'),
+      (2, 'snack_2',   'sweet',   'Semiya Payasam'),
       (2, 'night',     'tiffin',  'Uttapam'),
-      (2, 'snack_1',   'snack',   'Murukku'),
+      (2, 'snack_3',   'snack',   'Murukku'),
 
       (3, 'morning',   'rice',    'Tomato Rice'),
+      (3, 'snack_1',   'snack',   'Murukku'),
       (3, 'afternoon', 'rice',    'Steamed Rice'),
       (3, 'afternoon', 'gravy',   'Meen Kuzhambu'),
       (3, 'afternoon', 'poriyal', 'Beans Poriyal'),
+      (3, 'snack_2',   'snack',   'Murukku'),
       (3, 'night',     'curd',    'Curd Rice'),
       (3, 'snack_3',   'sweet',   'Semiya Payasam'),
 
       (4, 'morning',   'tiffin',  'Idli'),
       (4, 'morning',   'gravy',   'Rasam'),
+      (4, 'snack_1',   'snack',   'Murukku'),
       (4, 'afternoon', 'rice',    'Steamed Rice'),
       (4, 'afternoon', 'gravy',   'Kara Kuzhambu'),
       (4, 'afternoon', 'kootu',   'Paruppu Kootu'),
+      (4, 'snack_2',   'sweet',   'Semiya Payasam'),
       (4, 'night',     'tiffin',  'Plain Dosa'),
-      (4, 'snack_1',   'snack',   'Murukku'),
+      (4, 'snack_3',   'snack',   'Murukku'),
 
       (5, 'morning',   'tiffin',  'Ven Pongal'),
       (5, 'morning',   'gravy',   'Sambar'),
+      (5, 'snack_1',   'snack',   'Murukku'),
       (5, 'afternoon', 'rice',    'Lemon Rice'),
       (5, 'afternoon', 'poriyal', 'Cabbage Poriyal'),
-      (5, 'night',     'curd',    'Curd Rice'),
       (5, 'snack_2',   'sweet',   'Semiya Payasam'),
+      (5, 'night',     'curd',    'Curd Rice'),
+      (5, 'snack_3',   'snack',   'Murukku'),
 
       (6, 'morning',   'tiffin',  'Uttapam'),
       (6, 'morning',   'gravy',   'Rasam'),
+      (6, 'snack_1',   'snack',   'Murukku'),
       (6, 'afternoon', 'rice',    'Steamed Rice'),
       (6, 'afternoon', 'gravy',   'Chicken Chettinad'),
       (6, 'afternoon', 'poriyal', 'Carrot Poriyal'),
+      (6, 'snack_2',   'sweet',   'Semiya Payasam'),
       (6, 'night',     'rice',    'Tomato Rice'),
-      (6, 'snack_1',   'snack',   'Murukku')
+      (6, 'snack_3',   'snack',   'Murukku')
     ) as t(day_offset, slot, item_type, dish_name)
     order by day_offset, slot
   loop

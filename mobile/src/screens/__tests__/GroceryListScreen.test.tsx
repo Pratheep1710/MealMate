@@ -167,6 +167,36 @@ describe('GroceryListScreen', () => {
     expect(mealPlansBuilder.eq).toHaveBeenCalledWith('is_skipped', false);
   });
 
+  it('badges a frozen ingredient "No longer needed" once every slot that used it has been skipped, without removing it from the list', async () => {
+    mockTables({
+      grocery_list_snapshot: {
+        data: {
+          week_start: '2026-08-24',
+          ingredients: [
+            { ingredient_id: 'ing-1', name: 'Onion' },
+            { ingredient_id: 'ing-2', name: 'Chicken' },
+          ],
+        },
+        error: null,
+      },
+      // dish-2 (which used ing-2/Chicken) got skipped after the snapshot froze, so the live
+      // meal_plans query (already is_skipped=false filtered) no longer returns it — only dish-1
+      // (still cooking, needs ing-1/Onion) comes back.
+      meal_plans: { data: [{ plan_items: [{ dish_id: 'dish-1' }] }], error: null },
+      dish_ingredients: {
+        data: [{ ingredient_id: 'ing-1', ingredients: { canonical_name: 'Onion' } }],
+        error: null,
+      },
+    });
+
+    const tree = await renderScreen();
+
+    // Still listed — the frozen snapshot itself is never rewritten — but distinguishably marked.
+    expect(textOf(tree)).toContain('Chicken');
+    // Exactly one badge: Chicken (skipped-only), not Onion (still genuinely required).
+    expect(countHostNodesWithTestId(tree, 'grocery-item-no-longer-needed')).toBe(1);
+  });
+
   it('surfaces a query error instead of silently showing an empty list', async () => {
     mockTables({
       grocery_list_snapshot: {

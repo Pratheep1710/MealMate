@@ -14,6 +14,11 @@ const mockSignUp = jest.fn();
 const mockSignOut = jest.fn();
 const mockGetSession = jest.fn();
 const mockUnsubscribe = jest.fn();
+const mockUnregisterPushToken = jest.fn(() => Promise.resolve());
+
+jest.mock('../../lib/pushRegistration', () => ({
+  unregisterPushToken: () => mockUnregisterPushToken(),
+}));
 
 jest.mock('../../lib/supabase', () => ({
   supabase: {
@@ -179,6 +184,25 @@ describe('SessionProvider', () => {
     await rendered.mount();
     await rendered.current().signOut();
     expect(mockSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("signOut unregisters this device's push token before ending the session, so a shared/handed-off device stops receiving the outgoing user's reminders", async () => {
+    const callOrder: string[] = [];
+    mockUnregisterPushToken.mockImplementation(async () => {
+      callOrder.push('unregister');
+    });
+    mockSignOut.mockImplementation(async () => {
+      callOrder.push('signOut');
+    });
+
+    const rendered = renderSession();
+    await rendered.mount();
+    await rendered.current().signOut();
+
+    expect(mockUnregisterPushToken).toHaveBeenCalledTimes(1);
+    // Must unregister while the session (auth.uid()) is still valid — after signOut, the RPC's
+    // security-definer auth.uid() lookup would resolve to no one.
+    expect(callOrder).toEqual(['unregister', 'signOut']);
   });
 
   it('unsubscribes the auth listener on unmount', async () => {

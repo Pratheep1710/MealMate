@@ -254,6 +254,42 @@ describe('push_tokens — own rows only via SELECT, all writes go through regist
     await asAnon(db);
     await expect(db.query(`select register_push_token('ExponentPushToken[fff]')`)).rejects.toThrow();
   });
+
+  it('a user can unregister their own device token on sign-out', async () => {
+    await asUser(db, USER_A);
+    await db.query(`select register_push_token('ExponentPushToken[ggg]')`);
+    await db.query(`select unregister_push_token('ExponentPushToken[ggg]')`);
+
+    const res = await db.query(`select * from push_tokens where expo_push_token = 'ExponentPushToken[ggg]'`);
+    expect(res.rows).toHaveLength(0);
+  });
+
+  it("cannot unregister another user's token (account handoff: signing out on device B must not remove device A's still-active registration)", async () => {
+    await asUser(db, USER_A);
+    await db.query(`select register_push_token('ExponentPushToken[hhh]')`);
+    await reset(db);
+
+    await asUser(db, USER_B);
+    await db.query(`select unregister_push_token('ExponentPushToken[hhh]')`);
+    await reset(db);
+
+    await asServiceRole(db);
+    const res = await db.query(`select * from push_tokens where expo_push_token = 'ExponentPushToken[hhh]'`);
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0].user_id).toBe(USER_A);
+  });
+
+  it('unregistering an unknown token is a harmless no-op, not an error', async () => {
+    await asUser(db, USER_A);
+    await expect(
+      db.query(`select unregister_push_token('ExponentPushToken[does-not-exist]')`)
+    ).resolves.toBeDefined();
+  });
+
+  it('anon cannot call the unregister RPC', async () => {
+    await asAnon(db);
+    await expect(db.query(`select unregister_push_token('ExponentPushToken[fff]')`)).rejects.toThrow();
+  });
 });
 
 describe('generation_jobs / notification_log — read-only to owner, no cross-user leak', () => {

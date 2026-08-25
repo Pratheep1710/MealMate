@@ -1,12 +1,16 @@
 name: Daily reminder
 
 # MP-070: prior-day 8 PM IST reminder push. India has no DST, so a fixed UTC cron (20:00 IST -
-# 5:30 = 14:30 UTC) never drifts. workflow_dispatch is here for manual/verification runs — see
-# docs/MP-068-070-push-notifications.md for the one-time repo secrets this needs before it can do
-# anything besides fail with a clear ConfigError.
+# 5:30 = 14:30 UTC) never drifts.
+#
+# PR #10 review finding: the scheduled trigger was enabled before the repo secrets it needs
+# existed, so every nightly run would just fail with a ConfigError — noisy and pointless, not
+# actually gated on anything. Commented out until docs/MP-068-070-push-notifications.md's secrets
+# (SUPABASE_*, EXPO_ACCESS_TOKEN) are provisioned and a manual workflow_dispatch run has been
+# verified to succeed end-to-end; re-enable by uncommenting the `schedule:` block below.
 on:
-  schedule:
-    - cron: "30 14 * * *"
+  # schedule:
+  #   - cron: "30 14 * * *"
   workflow_dispatch:
 
 permissions:

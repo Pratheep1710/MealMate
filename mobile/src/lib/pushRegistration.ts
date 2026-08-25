@@ -75,3 +75,25 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 export async function syncPushToken(token: string): Promise<void> {
   await supabase.rpc('register_push_token', { token });
 }
+
+/** Unregisters this device's push token so a signed-out device stops receiving the outgoing
+ * user's reminders (0014_push_token_unregister.sql) — must be called while the session is still
+ * active (auth.uid() needs it) and therefore before supabase.auth.signOut(), not after. Same
+ * silent-no-op philosophy as registration: sign-out must never be blocked or fail because push
+ * cleanup didn't work.
+ */
+export async function unregisterPushToken(): Promise<void> {
+  if (!Device.isDevice) {
+    return;
+  }
+  const projectId = getProjectId();
+  if (!projectId) {
+    return;
+  }
+  try {
+    const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
+    await supabase.rpc('unregister_push_token', { token });
+  } catch {
+    // Permission revoked, offline, RPC failure — nothing actionable to do differently on sign-out.
+  }
+}

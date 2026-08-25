@@ -38,6 +38,29 @@ def upsert_pending(
     return NotificationLog.model_validate(row)
 
 
+def try_claim(
+    conn: psycopg.Connection[DictRow], notification_id: uuid.UUID
+) -> NotificationLog | None:
+    """MP-070 review fix: atomically transitions a notification_log row to 'processing' so two
+    overlapping runs can't both send the same reminder (see 0015's migration comment). Returns
+    the updated row if this call won the transition, or None if it was already sent/delivered,
+    already claimed by a concurrent run, or has used up should_send_reminder's one-retry budget
+    (mirrored here in SQL rather than in a separate read-then-write step, which is exactly the
+    race this closes) — callers must only send when this returns non-None.
+    """
+    row = conn.execute(
+        f"""
+        update notification_log
+        set status = 'processing', updated_at = now()
+        where id = %s
+          and (status = 'pending' or (status = 'failed' and attempt < 2))
+        returning {_COLUMNS}
+        """,
+        (notification_id,),
+    ).fetchone()
+    return NotificationLog.model_validate(row) if row else None
+
+
 def mark_status(
     conn: psycopg.Connection[DictRow],
     notification_id: uuid.UUID,

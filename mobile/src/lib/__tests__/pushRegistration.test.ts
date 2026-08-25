@@ -2,7 +2,11 @@
 // denied, no EAS project id, and Expo API failure — since it's a background nicety on app launch,
 // not something that should ever block or crash the app.
 
-import { registerForPushNotificationsAsync, syncPushToken } from '../pushRegistration';
+import {
+  registerForPushNotificationsAsync,
+  syncPushToken,
+  unregisterPushToken,
+} from '../pushRegistration';
 
 const mockIsDevice = { value: true };
 jest.mock('expo-device', () => ({
@@ -97,5 +101,36 @@ describe('syncPushToken', () => {
     expect(mockRpc).toHaveBeenCalledWith('register_push_token', {
       token: 'ExponentPushToken[abc]',
     });
+  });
+});
+
+describe('unregisterPushToken', () => {
+  it("calls the unregister_push_token RPC with this device's current token", async () => {
+    await unregisterPushToken();
+
+    expect(mockRpc).toHaveBeenCalledWith('unregister_push_token', {
+      token: 'ExponentPushToken[abc]',
+    });
+  });
+
+  it('does not call the RPC on a simulator (nothing registered to unregister)', async () => {
+    mockIsDevice.value = false;
+
+    await unregisterPushToken();
+
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('never throws when re-fetching the token fails during sign-out', async () => {
+    mockGetExpoPushTokenAsync.mockRejectedValue(new Error('offline'));
+
+    await expect(unregisterPushToken()).resolves.toBeUndefined();
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the RPC call itself fails during sign-out', async () => {
+    mockRpc.mockRejectedValueOnce(new Error('network error'));
+
+    await expect(unregisterPushToken()).resolves.toBeUndefined();
   });
 });
