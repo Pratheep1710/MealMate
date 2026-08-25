@@ -14,7 +14,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     name: 'Meal Planner',
-    slug: 'meal-planner',
+    slug: 'pratheep',
+    owner: 'pratheeplabss-team',
     version: '1.0.0',
     orientation: 'portrait',
     icon: './assets/icon.png',
@@ -38,6 +39,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     extra: {
       supabaseUrl: clientConfig.supabaseUrl,
       supabaseAnonKey: clientConfig.supabaseAnonKey,
+      eas: {
+        projectId: '4a06cb26-500e-4067-bbe6-f8c2fdf50058',
+      },
     },
   };
 };
