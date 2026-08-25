@@ -25,7 +25,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: 'com.pratheeplabss.mealplanner',
-      googleServicesFile: './google-services.json',
+      // MP-068: not committed (gitleaks flags its embedded Firebase API key) — EAS Build writes
+      // the file-type env var to disk and exposes its path here; local dev falls back to a
+      // gitignored copy kept at this same path (see docs/MP-068-070-push-notifications.md).
+      googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
       adaptiveIcon: {
         backgroundColor: '#E6F4FE',
         foregroundImage: './assets/android-icon-foreground.png',
