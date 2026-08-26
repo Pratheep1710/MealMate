@@ -125,11 +125,14 @@ class TestCatalogRepository:
         assert [c.name for c in candidates] == ["Veg Poriyal"]
 
     def test_get_candidates_hard_excludes_dietary_flags(self, conn):
-        _insert_dish(conn, name="Has Dairy", item_type="sweet", dietary_flags=["dairy"])
+        # "Milk-Dairy" is one of MP-017's decided controlled-vocabulary values (0016's
+        # dishes_dietary_flags_valid constraint rejects anything outside that set) — this used to
+        # be the placeholder value "dairy" from before that vocabulary was decided.
+        _insert_dish(conn, name="Has Dairy", item_type="sweet", dietary_flags=["Milk-Dairy"])
         _insert_dish(conn, name="No Dairy", item_type="sweet", dietary_flags=[])
 
         candidates = catalog_repo.get_candidates(
-            conn, item_type="sweet", exclude_dietary_flags=["dairy"]
+            conn, item_type="sweet", exclude_dietary_flags=["Milk-Dairy"]
         )
 
         assert [c.name for c in candidates] == ["No Dairy"]
