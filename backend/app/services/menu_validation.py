@@ -9,6 +9,11 @@ from typing import Literal
 
 from app.schemas.weekly_menu import WeeklyMenu
 from app.services.generation_context import GenerationContext
+from app.services.generation_eligibility import (
+    dietary_conflicts,
+    is_eligible,
+    normalized_dietary_flags,
+)
 
 ValidationCode = Literal[
     "candidate_membership",
@@ -60,11 +65,7 @@ def validate_menu(menu: WeeklyMenu, context: GenerationContext) -> MenuValidatio
     known_items = []
     for item in menu.items:
         dish = dishes.get(item.dish_id)
-        if (
-            dish is None
-            or item.dish_id not in context.eligible_dish_ids
-            or (dish is not None and dish.item_type != item.item_type)
-        ):
+        if dish is None or dish.item_type != item.item_type:
             issues.append(
                 ValidationIssue(
                     "candidate_membership",
@@ -74,6 +75,31 @@ def validate_menu(menu: WeeklyMenu, context: GenerationContext) -> MenuValidatio
             )
             continue
         known_items.append((item, dish))
+        if not is_eligible(dish, context):
+            if dish.id not in context.eligible_dish_ids:
+                issues.append(
+                    ValidationIssue(
+                        "candidate_membership",
+                        f"{item.day}/{item.slot}/{item.item_type} uses an ineligible dish",
+                    )
+                )
+            flags = normalized_dietary_flags(dish)
+            conflicts = sorted(dietary_conflicts(dish, context.profile.dietary_restrictions))
+            if flags is None:
+                issues.append(
+                    ValidationIssue(
+                        "dietary_restriction",
+                        f"{item.day}: dish {dish.id} has missing or invalid dietary metadata",
+                    )
+                )
+            elif conflicts:
+                issues.append(
+                    ValidationIssue(
+                        "dietary_restriction",
+                        f"{item.day}: dish {dish.id} conflicts with dietary restrictions: "
+                        f"{conflicts}",
+                    )
+                )
 
     counts: collections.Counter[object] = collections.Counter(
         dish.id for _, dish in known_items if dish.track_variety
@@ -94,15 +120,6 @@ def validate_menu(menu: WeeklyMenu, context: GenerationContext) -> MenuValidatio
                     f"{item.day}: dish {dish.id} was used in the trailing 10-day window",
                 )
             )
-        conflicts = sorted(set(dish.dietary_flags) & set(context.profile.dietary_restrictions))
-        if conflicts:
-            issues.append(
-                ValidationIssue(
-                    "dietary_restriction",
-                    f"{item.day}: dish {dish.id} conflicts with dietary restrictions: {conflicts}",
-                )
-            )
-
     by_day_slot: collections.Counter[tuple[datetime.date, str, str]] = collections.Counter(
         (item.day, item.slot, item.item_type) for item in menu.items
     )

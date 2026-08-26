@@ -133,6 +133,25 @@ def test_existing_claim_returns_without_calling_provider(monkeypatch: pytest.Mon
     assert generator.messages == []
 
 
+def test_claim_failure_rolls_back_before_propagating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        generation_engine,
+        "_claim",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("claim failed")),
+    )
+    conn = _Connection()
+
+    with pytest.raises(RuntimeError, match="claim failed"):
+        generation_engine.run_generation_engine(  # type: ignore[arg-type]
+            conn, uuid.uuid4(), WEEK_START, _SequenceGenerator([])
+        )
+
+    assert conn.rollbacks == 1
+    assert conn.commits == 0
+
+
 def test_scheduled_claim_atomically_retries_a_failed_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

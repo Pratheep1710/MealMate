@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from collections.abc import Mapping
 
 from app.models import Dish
 from app.services.generation_context import GenerationContext
+from app.services.generation_eligibility import is_eligible
 from app.services.generation_models import GeneratedPlan, PlannedItem
 
 
-def _rank(dish: Dish, context: GenerationContext, *, quick: bool) -> tuple[object, ...]:
+def _rank(
+    dish: Dish,
+    context: GenerationContext,
+    last_used_by_dish_id: Mapping[uuid.UUID, datetime.date],
+    *,
+    quick: bool,
+) -> tuple[object, ...]:
     return (
         0 if dish.id in context.favorite_dish_ids else 1,
-        context.last_used_by_dish_id.get(dish.id, datetime.date.min),
+        last_used_by_dish_id.get(dish.id, datetime.date.min),
         dish.prep_minutes if quick and dish.prep_minutes is not None else 10**9 if quick else 0,
         dish.name.casefold(),
         str(dish.id),
@@ -28,19 +36,25 @@ def _pick(
     used_variety_ids: set[uuid.UUID],
     quick: bool,
 ) -> Dish | None:
-    restrictions = set(context.profile.dietary_restrictions)
     group = next((group for group in context.catalog if group.item_type == item_type), None)
     candidates = [
         dish
         for dish in (group.dishes if group else ())
-        if dish.id in context.eligible_dish_ids
-        and not (set(dish.dietary_flags) & restrictions)
+        if is_eligible(dish, context)
         and (not dish.track_variety or dish.id not in used_variety_ids)
         and (desired_diet is None or dish.veg_or_nonveg == desired_diet)
     ]
     strict = [dish for dish in candidates if dish.id not in context.recent_dish_ids]
     eligible = strict or candidates  # relax trailing history before any other soft constraint
-    return min(eligible, key=lambda dish: _rank(dish, context, quick=quick)) if eligible else None
+    last_used_by_dish_id = context.last_used_by_dish_id
+    return (
+        min(
+            eligible,
+            key=lambda dish: _rank(dish, context, last_used_by_dish_id, quick=quick),
+        )
+        if eligible
+        else None
+    )
 
 
 def build_fallback_plan(context: GenerationContext) -> GeneratedPlan:

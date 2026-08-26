@@ -92,6 +92,7 @@ def test_phase6_generation_context_imports():
     for module_name, expected_function in {
         "app.services.generation_context": "build_generation_context",
         "app.services.generation_prompt": "build_generation_prompt",
+        "app.services.generation_eligibility": "is_eligible",
         "app.services.menu_validation": "validate_menu",
         "app.services.rule_based_fallback": "build_fallback_plan",
         "app.services.plan_persistence": "persist_generated_plan",

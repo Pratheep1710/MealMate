@@ -7,6 +7,7 @@ from typing import Any, TypedDict
 
 from app.services.generation_context import GenerationContext
 from app.services.menu_validation import ValidationIssue
+from app.services.slot_templates import static_template_contract
 
 
 class PromptMessage(TypedDict):
@@ -64,18 +65,7 @@ def build_generation_prompt(
             "Prefer lower prep_minutes on quick days and broader variety on flexible days.",
             "Only use IDs in eligible_dish_ids.",
         ],
-        "slot_templates": {
-            "morning": [{"item_type": "tiffin", "minimum": 1, "maximum": 1}],
-            "afternoon": [
-                {"item_type": "rice", "minimum": 1, "maximum": 1},
-                {"item_type": "gravy", "minimum": 1, "maximum": 2},
-                {"item_type": "poriyal", "minimum": 1, "maximum": 1},
-            ],
-            "night_alternatives": ["rice", "tiffin"],
-            "snack_1": [{"item_type": "snack", "minimum": 1, "maximum": 1}],
-            "snack_2": [{"item_type": "snack", "minimum": 1, "maximum": 1}],
-            "snack_3": [{"item_type": "snack", "minimum": 1, "maximum": 1}],
-        },
+        "slot_templates": static_template_contract(),
         "catalog": catalog,
     }
     dynamic = {

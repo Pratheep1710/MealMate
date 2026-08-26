@@ -67,7 +67,7 @@ def make_context(
         favorite_dish_ids=frozenset(),
         eligible_dish_ids=candidate_ids,
         available_ingredient_ids=frozenset(),
-        last_used=(),
+        last_used_by_dish_id={},
         nonveg_target_dates=frozenset({WEEK_START}),
     )
 

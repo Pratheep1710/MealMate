@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import psycopg
 from psycopg.rows import DictRow
@@ -34,12 +36,6 @@ class CatalogGroup:
 
 
 @dataclass(frozen=True)
-class DishUsage:
-    dish_id: uuid.UUID
-    last_used: datetime.date
-
-
-@dataclass(frozen=True)
 class GenerationContext:
     profile: UserProfile
     week: WeeklyContext
@@ -50,7 +46,7 @@ class GenerationContext:
     favorite_dish_ids: frozenset[uuid.UUID]
     eligible_dish_ids: frozenset[uuid.UUID]
     available_ingredient_ids: frozenset[uuid.UUID]
-    last_used: tuple[DishUsage, ...]
+    last_used_by_dish_id: Mapping[uuid.UUID, datetime.date]
     nonveg_target_dates: frozenset[datetime.date]
 
     @property
@@ -65,14 +61,8 @@ class GenerationContext:
     def dishes_by_id(self) -> dict[uuid.UUID, Dish]:
         return {dish.id: dish for group in self.catalog for dish in group.dishes}
 
-    @property
-    def last_used_by_dish_id(self) -> dict[uuid.UUID, datetime.date]:
-        return {usage.dish_id: usage.last_used for usage in self.last_used}
 
-
-def _evenly_spaced_dates(
-    dates: tuple[datetime.date, ...], count: int
-) -> frozenset[datetime.date]:
+def _evenly_spaced_dates(dates: tuple[datetime.date, ...], count: int) -> frozenset[datetime.date]:
     if count <= 0 or not dates:
         return frozenset()
     if count >= len(dates):
@@ -80,10 +70,27 @@ def _evenly_spaced_dates(
     # Select the midpoint of each equally sized bucket. This is deterministic and avoids
     # clustering count-only non-veg days at the start or end of the week.
     indexes = [
-        min(len(dates) - 1, ((2 * index + 1) * len(dates)) // (2 * count))
-        for index in range(count)
+        min(len(dates) - 1, ((2 * index + 1) * len(dates)) // (2 * count)) for index in range(count)
     ]
     return frozenset(dates[index] for index in indexes)
+
+
+def build_generation_catalog(
+    conn: psycopg.Connection[DictRow],
+) -> tuple[CatalogGroup, ...]:
+    """Load the shared, deterministic catalog prefix once per sweep when supplied by the caller."""
+    return tuple(
+        CatalogGroup(
+            item_type,
+            tuple(
+                sorted(
+                    catalog_repo.get_candidates(conn, item_type=item_type),
+                    key=lambda dish: (dish.name.casefold(), str(dish.id)),
+                )
+            ),
+        )
+        for item_type in GENERATION_ITEM_TYPES
+    )
 
 
 def build_generation_context(
@@ -92,6 +99,7 @@ def build_generation_context(
     week_start: datetime.date,
     *,
     start_date: datetime.date | None = None,
+    catalog: tuple[CatalogGroup, ...] | None = None,
 ) -> GenerationContext:
     """Assemble the static catalogue prefix and dynamic per-user suffix for one generation run.
 
@@ -118,24 +126,13 @@ def build_generation_context(
 
     # Do not add per-user filters here. Keeping this prefix stable is an explicit prompt-caching
     # requirement; dietary/history rules travel separately and are validated after the model call.
-    catalog = tuple(
-        CatalogGroup(
-            item_type,
-            tuple(
-                sorted(
-                    catalog_repo.get_candidates(conn, item_type=item_type),
-                    key=lambda dish: (dish.name.casefold(), str(dish.id)),
-                )
-            ),
-        )
-        for item_type in GENERATION_ITEM_TYPES
-    )
+    if catalog is None:
+        catalog = build_generation_catalog(conn)
     recent_dish_ids = frozenset(get_variety_exclusion_set(conn, user_id, effective_start))
     favorite_dish_ids = frozenset(profiles_repo.list_favorite_dish_ids(conn, user_id))
     usage_by_id = history_repo.get_dish_last_used_dates(conn, user_id, effective_start)
-    last_used = tuple(
-        DishUsage(dish_id, used_on)
-        for dish_id, used_on in sorted(usage_by_id.items(), key=lambda item: str(item[0]))
+    last_used_by_dish_id = MappingProxyType(
+        dict(sorted(usage_by_id.items(), key=lambda item: str(item[0])))
     )
 
     if profile.planning_mode == "reserves":
@@ -175,6 +172,6 @@ def build_generation_context(
         favorite_dish_ids=favorite_dish_ids,
         eligible_dish_ids=eligible_dish_ids,
         available_ingredient_ids=available_ingredient_ids,
-        last_used=last_used,
+        last_used_by_dish_id=last_used_by_dish_id,
         nonveg_target_dates=nonveg_target_dates,
     )

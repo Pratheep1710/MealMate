@@ -138,6 +138,21 @@ def test_profile_sweep_lists_each_profile(conn, make_user) -> None:
     assert users <= {profile.id for profile in profiles_repo.list_profiles(conn)}
 
 
+def test_grocery_snapshot_rewrite_preserves_the_original_frozen_timestamp(conn, make_user) -> None:
+    user_id = make_user()
+    plans_repo.write_grocery_snapshot(conn, user_id, _WEEK_START, [{"name": "Onion"}])
+    frozen_at = datetime.datetime(2026, 1, 2, 3, 4, tzinfo=datetime.UTC)
+    conn.execute(
+        "update grocery_list_snapshot set created_at = %s where user_id = %s and week_start = %s",
+        (frozen_at, user_id, _WEEK_START),
+    )
+
+    rewritten = plans_repo.write_grocery_snapshot(conn, user_id, _WEEK_START, [{"name": "Tomato"}])
+
+    assert rewritten.created_at == frozen_at
+    assert rewritten.ingredients == [{"name": "Tomato"}]
+
+
 def test_persist_generated_plan_replaces_items_builds_snapshot_and_outbox(conn, make_user) -> None:
     user_id = make_user()
     profile = profiles_repo.get_profile(conn, user_id)

@@ -31,6 +31,49 @@ class SlotTemplate:
     items: tuple[ItemRequirement, ...]
 
 
+_MORNING = SlotTemplate("morning", (ItemRequirement("tiffin"),))
+_AFTERNOON = SlotTemplate(
+    "afternoon",
+    (
+        ItemRequirement("rice"),
+        ItemRequirement("gravy", maximum=2),
+        ItemRequirement("poriyal"),
+    ),
+)
+_SNACKS = tuple(
+    SlotTemplate(slot, (ItemRequirement("snack"),)) for slot in ("snack_1", "snack_2", "snack_3")
+)
+
+
+def _serialize(template: SlotTemplate) -> dict[str, object]:
+    return {
+        "slot": template.slot,
+        "items": [
+            {
+                "item_type": item.item_type,
+                "minimum": item.minimum,
+                "maximum": item.maximum,
+            }
+            for item in template.items
+        ],
+    }
+
+
+def static_template_contract() -> dict[str, object]:
+    """All valid template branches for the stable model prompt, from the runtime source."""
+    return {
+        "fixed_slots": [_serialize(_MORNING), _serialize(_AFTERNOON), *map(_serialize, _SNACKS)],
+        "night_by_dinner_style": {
+            dinner_style: _serialize(SlotTemplate("night", (ItemRequirement(dinner_style),)))
+            for dinner_style in ("rice", "tiffin")
+        },
+        "instruction": (
+            "Use exactly the night template named by the dynamic profile.dinner_style; "
+            "the branches are alternatives, never interchangeable within one response."
+        ),
+    }
+
+
 def templates_for_profile(profile: UserProfile) -> tuple[SlotTemplate, ...]:
     """Return the six runtime templates, resolving only the user's dinner-style branch.
 
@@ -42,17 +85,8 @@ def templates_for_profile(profile: UserProfile) -> tuple[SlotTemplate, ...]:
         raise ValueError(f"unsupported dinner_style: {profile.dinner_style!r}")
 
     return (
-        SlotTemplate("morning", (ItemRequirement("tiffin"),)),
-        SlotTemplate(
-            "afternoon",
-            (
-                ItemRequirement("rice"),
-                ItemRequirement("gravy", maximum=2),
-                ItemRequirement("poriyal"),
-            ),
-        ),
+        _MORNING,
+        _AFTERNOON,
         SlotTemplate("night", (ItemRequirement(profile.dinner_style),)),
-        SlotTemplate("snack_1", (ItemRequirement("snack"),)),
-        SlotTemplate("snack_2", (ItemRequirement("snack"),)),
-        SlotTemplate("snack_3", (ItemRequirement("snack"),)),
+        *_SNACKS,
     )

@@ -44,6 +44,22 @@ def test_static_prefix_does_not_change_with_user_specific_profile_values() -> No
     assert first[1] != second[1]
 
 
+def test_night_template_branches_are_explicit_and_dynamic_selection_is_authoritative() -> None:
+    context = make_context(dinner_style="tiffin")
+    messages = build_generation_prompt(context)
+    static = json.loads(messages[0]["content"])
+    dynamic = json.loads(messages[1]["content"])
+
+    night_variants = static["slot_templates"]["night_by_dinner_style"]
+    assert night_variants["rice"]["items"][0]["item_type"] == "rice"
+    assert night_variants["tiffin"]["items"][0]["item_type"] == "tiffin"
+    selected_night = next(
+        template for template in dynamic["selected_slot_templates"] if template["slot"] == "night"
+    )
+    assert selected_night["items"][0]["item_type"] == "tiffin"
+    assert "night_alternatives" not in static["slot_templates"]
+
+
 def test_retry_feedback_is_appended_after_the_dynamic_context() -> None:
     issue = ValidationIssue("nonveg_quota", "wrong non-veg dates")
     messages = build_generation_prompt(make_context(), retry_issues=(issue,))

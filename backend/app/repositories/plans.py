@@ -255,8 +255,7 @@ def write_grocery_snapshot(
         insert into grocery_list_snapshot (user_id, week_start, ingredients)
         values (%s, %s, %s)
         on conflict (user_id, week_start) do update set
-            ingredients = excluded.ingredients,
-            created_at = now()
+            ingredients = excluded.ingredients
         returning {_SNAPSHOT_COLUMNS}
         """,
         (user_id, week_start, Json(ingredients)),

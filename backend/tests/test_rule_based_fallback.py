@@ -51,6 +51,20 @@ def test_fallback_relaxes_recent_history_before_manual_pick() -> None:
     assert all(item.status == "filled" for item in plan.items)
 
 
+def test_fallback_relaxes_history_before_relaxing_nonveg_quota() -> None:
+    context = make_context(day_count=1)
+    tiffins = next(group.dishes for group in context.catalog if group.item_type == "tiffin")
+    recent_nonveg = next(dish for dish in tiffins if dish.veg_or_nonveg == "nonveg")
+    fresh_veg = next(dish for dish in tiffins if dish.veg_or_nonveg == "veg")
+    context = replace(context, recent_dish_ids=frozenset({recent_nonveg.id}))
+
+    plan = build_fallback_plan(context)
+    morning = next(item for item in plan.items if item.slot == "morning")
+
+    assert morning.dish_id == recent_nonveg.id
+    assert morning.dish_id != fresh_veg.id
+
+
 def test_fallback_surfaces_manual_pick_when_safe_pool_is_empty() -> None:
     context = make_context()
     context = replace(context, eligible_dish_ids=frozenset())

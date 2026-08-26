@@ -1,8 +1,23 @@
-# MP-034–044 — Phase 6 Weekly Generation Engine
+# MP-034–047 — Phase 6 Weekly Generation Engine
 
 ## Status
 
 Implemented on `codex/phase-6-implementation`.
+
+### Task-by-task status
+
+| Task | Status | Implementation |
+|---|---|---|
+| MP-034 | Complete | Candidate catalog and generation context |
+| MP-035 | Complete | Rolling 10-day variety exclusion with favorites exemption |
+| MP-036 | Complete | Weekly dates, prep bias, non-veg targets, and combo templates |
+| MP-037 | Complete | Strict Pydantic `WeeklyMenu` structured-output contract |
+| MP-038 | Complete | Deterministic shared static prompt prefix |
+| MP-039 | Complete | Compact per-user dynamic prompt suffix |
+| MP-040 | Complete | OpenAI Responses API adapter with structured parsing |
+| MP-041–044 | Complete | Six code-level validation rules and one corrective retry |
+| MP-047 | Complete | Deterministic fallback with explicit relaxation ordering |
+| Provider-quality eval harness | **Open** | Unit/integration tests cover contracts, but a representative model-output eval dataset and quality/cost regression gate have not been built yet. This remains required before changing the production model or prompt behavior. |
 
 Phase 6 closes the generation loop that Phase 3 scaffolded and Phase 5's catalog unlocked:
 
@@ -19,10 +34,29 @@ The OpenAI adapter follows the current official Structured Outputs example:
 `client.responses.parse(..., text_format=WeeklyMenu)` and reads `response.output_parsed`.
 Source: https://developers.openai.com/api/docs/guides/structured-outputs
 
+## Model choice
+
+The selected Phase 6 baseline is **`gpt-5.6-luna`**, supplied through `OPENAI_MODEL` (not
+hard-coded). This weekly menu task is constrained to a curated catalog, returns a strict schema,
+and is protected by six deterministic validators plus a safe fallback, so the cost-sensitive,
+high-volume member of the current GPT-5.6 family is the appropriate starting point. Official
+OpenAI guidance describes Luna as the cost-sensitive/high-volume option and lists the current
+models as available through the Responses API:
+https://developers.openai.com/api/docs/models
+
+This is a baseline choice, not an assertion that quality has already been benchmarked. The
+repository secret must be set to the selected model, and any model/prompt change must wait for the
+open eval harness above and be compared on representative weekly-menu cases. Official model
+guidance likewise recommends validating resource savings only when the workload's evals still
+pass: https://developers.openai.com/api/docs/guides/latest-model
+
 ## Runtime modules
 
-- `app/services/generation_context.py` — profile, dates, catalog, favorites, history, Reserves
-  eligibility, and deterministic count-only non-veg placement.
+- `app/services/generation_context.py` — shared catalog loading plus profile, dates, favorites,
+  history, Reserves eligibility, and deterministic count-only non-veg placement. The scheduler
+  loads the catalog once per sweep and injects it into every per-profile context.
+- `app/services/generation_eligibility.py` — the shared fail-closed dietary and Reserves hard gate
+  used by both response validation and fallback selection.
 - `app/services/generation_prompt.py` — static-first JSON prompt. User restrictions, dinner style,
   history, and availability appear only in the dynamic suffix; tests pin this cache invariant.
 - `app/services/openai_generation.py` — injectable Responses API boundary. Tests never call the

@@ -10,7 +10,11 @@ import pytest
 
 from app.models import Dish, UserProfile
 from app.services import generation_context
-from app.services.generation_context import _evenly_spaced_dates, build_generation_context
+from app.services.generation_context import (
+    _evenly_spaced_dates,
+    build_generation_catalog,
+    build_generation_context,
+)
 from app.services.slot_templates import GENERATION_ITEM_TYPES, templates_for_profile
 
 _WEEK_START = datetime.date(2026, 8, 24)
@@ -152,6 +156,23 @@ def test_catalog_groups_have_deterministic_name_then_id_order(
     assert [dish.name for dish in context.catalog[0].dishes] == ["alpha", "Zulu"]
 
 
+def test_preloaded_catalog_is_reused_without_refetching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _profile()
+    catalog_calls, _ = _wire_context_dependencies(monkeypatch, profile)
+    shared_catalog = build_generation_catalog(object())  # type: ignore[arg-type]
+    assert len(catalog_calls) == len(GENERATION_ITEM_TYPES)
+    catalog_calls.clear()
+
+    context = build_generation_context(  # type: ignore[arg-type]
+        object(), profile.id, _WEEK_START, catalog=shared_catalog
+    )
+
+    assert context.catalog is shared_catalog
+    assert catalog_calls == []
+
+
 def test_suggestion_mode_never_reads_or_applies_availability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,7 +218,10 @@ def test_partial_week_starts_on_requested_date_and_uses_it_for_history(
     start_date = _WEEK_START + datetime.timedelta(days=3)
 
     context = build_generation_context(
-        object(), profile.id, _WEEK_START, start_date=start_date  # type: ignore[arg-type]
+        object(),
+        profile.id,
+        _WEEK_START,
+        start_date=start_date,  # type: ignore[arg-type]
     )
 
     assert context.target_dates == tuple(
