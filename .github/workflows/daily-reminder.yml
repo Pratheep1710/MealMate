@@ -37,6 +37,11 @@ jobs:
 
       - name: Run daily reminder job
         env:
+          # `python scripts/run_daily_reminder.py` puts scripts/ (the invoked file's own
+          # directory), not backend/, on sys.path[0] — app/ is a sibling of scripts/, not inside
+          # it, so `from app.config import ...` fails with ModuleNotFoundError without this.
+          # Caught by the first real workflow_dispatch run (PR #10 review, MP-070 verification).
+          PYTHONPATH: .
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
