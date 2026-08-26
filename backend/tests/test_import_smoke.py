@@ -68,6 +68,11 @@ def test_phase3_services_import():
             )
 
 
+def test_phase6_generation_context_imports():
+    module = importlib.import_module("app.services.generation_context")
+    assert callable(module.build_generation_context)
+
+
 def test_weekly_menu_schema_imports():
     module = importlib.import_module("app.schemas.weekly_menu")
     assert module.WeeklyMenu is not None
