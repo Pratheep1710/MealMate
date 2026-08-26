@@ -2,14 +2,20 @@
 can safely start.
 
 Checks, against the live `dishes` table, that every (item_type, veg_or_nonveg) combination the
-schema itself defines has a non-zero candidate count, both unfiltered and under each single
-dietary_flags hard exclusion individually (mirroring backend/app/repositories/catalog.py's
-get_candidates array-overlap exclusion). MP-034's actual combo templates (which slots need which
-item_types together) don't exist yet — this validates at the level MP-003's coverage gate itself
-describes ("every (slot, item_type) combination... for both veg and non-veg... under at least the
-common dietary_flags exclusions"), which is everything checkable before that later dependency
-lands. Re-run this once MP-034's templates exist to validate the actual per-slot combinations, not
-just the per-item_type/diet/flag cross product this covers now.
+schema itself defines has a non-zero candidate count, unfiltered and under every combination of
+simultaneous dietary_flags hard exclusions a user could plausibly select (mirroring
+backend/app/repositories/catalog.py's get_candidates array-overlap exclusion, which takes a whole
+list of flags at once — a real user with two allergies excludes on both simultaneously, not one at
+a time). PR #12 review finding: an earlier version only checked one flag excluded at a time, which
+can pass every single-flag check while still having zero candidates for someone excluding, say,
+both Gluten and Nuts together.
+
+MP-034's actual combo templates (which slots need which item_types together) don't exist yet — this
+validates at the level MP-003's coverage gate itself describes ("every (slot, item_type)
+combination... for both veg and non-veg... under at least the common dietary_flags exclusions"),
+which is everything checkable before that later dependency lands. Re-run this once MP-034's
+templates exist to validate the actual per-slot combinations, not just the per-item_type/diet cross
+product this covers now.
 
 Usage:
   python supabase/seed/validate_coverage.py
@@ -20,6 +26,7 @@ any zero-candidate combination is found (a real gap to report back, not round aw
 
 from __future__ import annotations
 
+import itertools
 import os
 import sys
 
@@ -44,16 +51,34 @@ def _connect() -> psycopg.Connection:
     )
 
 
-def _count(cur: psycopg.Cursor, *, item_type: str, veg_or_nonveg: str, exclude_flag: str | None) -> int:
-    conditions = ["item_type = %s", "veg_or_nonveg = %s"]
-    params: list[object] = [item_type, veg_or_nonveg]
-    if exclude_flag is not None:
-        conditions.append("not (dietary_flags && %s)")
-        params.append([exclude_flag])
-    sql = "select count(*) from dishes where " + " and ".join(conditions)
-    cur.execute(sql, params)
-    (count,) = cur.fetchone()
-    return count
+def _minimal_failing_flag_sets(
+    flag_sets: list[frozenset[str]], all_flags: tuple[str, ...] = DIETARY_FLAGS
+) -> list[frozenset[str]]:
+    """Every dish in a group carries some set of dietary_flags (possibly empty). A candidate
+    exclusion-set S "fails" (zero candidates survive) when every dish has at least one flag in S —
+    i.e. no dish's flags are disjoint from S. Returns the *minimal* failing sets only: if
+    excluding just {Gluten} already fails, {Gluten, Nuts} is a trivial consequence (adding more
+    exclusions can only remove more candidates, never add them back) and isn't reported
+    separately — reporting every superset of an already-failing set would bury the one fact that
+    actually matters (which single flag or minimal combination is the real blocker) under
+    combinatorial noise. In-memory over a fetched flag list, not one query per subset — cheap even
+    at the full 2^6 - 1 = 63 non-empty subsets of the 6-flag vocabulary.
+    """
+    if not flag_sets:
+        return []  # the caller handles a fully-empty group as its own "0 candidates" gap
+
+    def fails(subset: frozenset[str]) -> bool:
+        return all(fs & subset for fs in flag_sets)
+
+    minimal: list[frozenset[str]] = []
+    for size in range(1, len(all_flags) + 1):
+        for combo in itertools.combinations(all_flags, size):
+            subset = frozenset(combo)
+            if any(subset >= m for m in minimal):
+                continue  # already implied by a smaller minimal failing set
+            if fails(subset):
+                minimal.append(subset)
+    return minimal
 
 
 def validate(conn: psycopg.Connection) -> tuple[list[str], list[str]]:
@@ -66,17 +91,21 @@ def validate(conn: psycopg.Connection) -> tuple[list[str], list[str]]:
     with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
         for item_type in ITEM_TYPES:
             for diet in VEG_OR_NONVEG:
-                base_count = _count(cur, item_type=item_type, veg_or_nonveg=diet, exclude_flag=None)
-                if base_count == 0:
-                    gaps.append(f"{item_type} / {diet}: 0 candidates unfiltered")
-                    continue  # no point checking flag exclusions on an already-empty base
-                if base_count < 3:
-                    warnings.append(f"{item_type} / {diet}: only {base_count} candidate(s) unfiltered")
+                cur.execute(
+                    "select dietary_flags from dishes where item_type = %s and veg_or_nonveg = %s",
+                    (item_type, diet),
+                )
+                flag_sets = [frozenset(row[0]) for row in cur.fetchall()]
 
-                for flag in DIETARY_FLAGS:
-                    excluded_count = _count(cur, item_type=item_type, veg_or_nonveg=diet, exclude_flag=flag)
-                    if excluded_count == 0:
-                        gaps.append(f"{item_type} / {diet}, excluding '{flag}': 0 candidates")
+                if not flag_sets:
+                    gaps.append(f"{item_type} / {diet}: 0 candidates unfiltered")
+                    continue  # no point checking exclusions on an already-empty group
+                if len(flag_sets) < 3:
+                    warnings.append(f"{item_type} / {diet}: only {len(flag_sets)} candidate(s) unfiltered")
+
+                for subset in _minimal_failing_flag_sets(flag_sets):
+                    label = " + ".join(sorted(subset))
+                    gaps.append(f"{item_type} / {diet}, excluding [{label}]: 0 candidates")
     return gaps, warnings
 
 
@@ -87,8 +116,11 @@ def main() -> int:
     finally:
         conn.close()
 
-    total_combos = len(ITEM_TYPES) * len(VEG_OR_NONVEG) * (1 + len(DIETARY_FLAGS))
-    print(f"Checked {total_combos} (item_type, veg_or_nonveg, dietary_flag exclusion) combinations.")
+    print(
+        f"Checked {len(ITEM_TYPES) * len(VEG_OR_NONVEG)} (item_type, veg_or_nonveg) groups against "
+        f"every combination of the {len(DIETARY_FLAGS)}-flag vocabulary a user could exclude "
+        "simultaneously."
+    )
 
     if warnings:
         print(f"\n{len(warnings)} low-margin warning(s) (non-zero but thin — not a gate failure):")
@@ -106,7 +138,7 @@ def main() -> int:
         )
         return 1
 
-    print("\nNo zero-candidate gaps. MP-020 gate PASSES.")
+    print("\nNo zero-candidate gaps, single flag or in combination. MP-020 gate PASSES.")
     return 0
 
 

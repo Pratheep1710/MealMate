@@ -39,31 +39,49 @@ class TestFindNearDuplicates:
         assert dupes == {}
 
 
-class TestFindGenericSourced:
+class TestFindNonTamilSpecificSourced:
     def test_a_generic_south_indian_url_is_flagged(self) -> None:
         rows = [("Chicken 65", "https://example.com/collection/south-indian-non-veg-recipes")]
 
-        flagged = mp019.find_generic_sourced(rows)
+        flagged = mp019.find_non_tamil_specific_sourced(rows)
 
         assert flagged == [("Chicken 65", rows[0][1])]
 
     def test_a_tamil_specific_url_is_not_flagged_even_if_it_says_south_indian(self) -> None:
         rows = [("Idli", "https://example.com/tamil-south-indian-breakfast")]
 
-        flagged = mp019.find_generic_sourced(rows)
+        flagged = mp019.find_non_tamil_specific_sourced(rows)
 
         assert flagged == []
 
-    def test_a_non_south_indian_url_is_not_flagged(self) -> None:
+    def test_a_tamil_specific_url_that_never_says_south_indian_is_not_flagged(self) -> None:
         rows = [("Idli", "https://en.wikipedia.org/wiki/Tamil_cuisine")]
 
-        flagged = mp019.find_generic_sourced(rows)
+        flagged = mp019.find_non_tamil_specific_sourced(rows)
 
         assert flagged == []
 
-    def test_a_missing_url_is_skipped_not_flagged(self) -> None:
+    def test_a_missing_url_is_flagged_not_skipped(self) -> None:
+        # PR #12 review finding: a missing citation is worse than a generic one for a
+        # traceability requirement — it must not be silently ignored.
         rows = [("Mystery Dish", None)]
 
-        flagged = mp019.find_generic_sourced(rows)
+        flagged = mp019.find_non_tamil_specific_sourced(rows)
 
-        assert flagged == []
+        assert flagged == [("Mystery Dish", None)]
+
+    def test_a_blank_url_is_flagged_as_missing(self) -> None:
+        rows = [("Mystery Dish 2", "   ")]
+
+        flagged = mp019.find_non_tamil_specific_sourced(rows)
+
+        assert flagged == [("Mystery Dish 2", None)]
+
+    def test_a_non_tamil_url_that_never_says_south_indian_is_still_flagged(self) -> None:
+        # Broader than the old "south-indian"-substring-only check — anything not mentioning
+        # Tamil Nadu at all fails the traceability requirement, not just the one known phrasing.
+        rows = [("Random Dish", "https://example.com/some-other-regions-recipes")]
+
+        flagged = mp019.find_non_tamil_specific_sourced(rows)
+
+        assert flagged == [("Random Dish", rows[0][1])]

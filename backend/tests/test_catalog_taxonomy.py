@@ -52,6 +52,15 @@ class TestInferMeatType:
         )
         assert meat_type == "mutton"
 
+    def test_keyword_does_not_false_positive_as_an_embedded_substring(self) -> None:
+        # PR #12 review finding class: infer_meat_type shares the same word-boundary matching as
+        # infer_dietary_flags — "fish" must not match inside an unrelated word like "selfish".
+        meat_type, _ = infer_meat_type(
+            diet="Non-Vegetarian", subfamily="Non-veg snack", name="A Selfish Snack",
+            main_ingredients="Turkey",
+        )
+        assert meat_type == "other"  # resolved via "turkey", not a stray "fish" inside "selfish"
+
     def test_main_ingredients_takes_priority_over_a_misleading_name(self) -> None:
         # "Vaankozhi" contains "kozhi" (chicken keyword) but Main Ingredient(s) already says
         # Turkey explicitly — the ingredient column must win, not a name substring.
@@ -162,3 +171,43 @@ class TestInferDietaryFlags:
         )
         assert flags == []
         assert isinstance(flags, list)
+
+    def test_til_does_not_false_positive_inside_lentil(self) -> None:
+        # PR #12 review finding: naive substring matching let "til" match inside "lentil".
+        flags = infer_dietary_flags(
+            diet="Vegetarian", family="Kootu", subfamily="Kootu", name="Lentil Kootu",
+            main_ingredients="Lentil + vegetables",
+        )
+        assert "Sesame" not in flags
+
+    def test_egg_does_not_false_positive_inside_eggplant(self) -> None:
+        # PR #12 review finding: naive substring matching let "egg" match inside "eggplant".
+        flags = infer_dietary_flags(
+            diet="Vegetarian", family="Poriyal", subfamily="Poriyal", name="Eggplant Poriyal",
+            main_ingredients="Eggplant",
+        )
+        assert "Egg" not in flags
+
+    def test_atta_does_not_false_positive_inside_pattani(self) -> None:
+        # PR #12 review finding: naive substring matching let "atta" match inside "pattani"
+        # (Tamil for green peas — not remotely wheat-related).
+        flags = infer_dietary_flags(
+            diet="Vegetarian", family="Poriyal", subfamily="Poriyal", name="Pattani Poriyal",
+            main_ingredients="Pattani",
+        )
+        assert "Gluten" not in flags
+
+    def test_a_real_wheat_ingredient_still_tags_gluten(self) -> None:
+        # The boundary-match fix must not lose real matches along with the false ones.
+        flags = infer_dietary_flags(
+            diet="Vegetarian", family="Tiffin", subfamily="Dosai", name="Godhumai Dosai",
+            main_ingredients="Wheat flour",
+        )
+        assert "Gluten" in flags
+
+    def test_a_multi_word_keyword_phrase_still_matches_as_a_whole(self) -> None:
+        flags = infer_dietary_flags(
+            diet="Non-Vegetarian", family="Kuzhambu", subfamily="Fish gravy",
+            name="Vanjaram Meen Kuzhambu", main_ingredients="Seer fish",
+        )
+        assert "Seafood" in flags

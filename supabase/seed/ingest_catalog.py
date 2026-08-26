@@ -12,11 +12,14 @@ idempotency or conflict handling (see its own docstring). This one:
 
 On conflict (an existing row with the same lower(name)): item_type, veg_or_nonveg, region_style,
 meat_type, and dietary_flags are refreshed from the workbook every run, since the workbook is this
-data's source of truth. track_variety and prep_minutes are deliberately left untouched on conflict
-— the workbook has no prep_minutes column at all (a confirmed gap, not an oversight), and
-track_variety may carry a hand-curated override (dev_placeholder_dishes.sql marks some non-rice/curd
-staples false too, by editorial judgment this systematic pass shouldn't clobber). Both are only ever
-set on first insert.
+data's source of truth. prep_minutes is never touched on conflict — the workbook has no
+prep_minutes column at all (a confirmed gap, not an oversight) — and is only ever set on first
+insert. track_variety is corrected one-directionally on conflict: an existing `true` is overwritten
+if the systematic rule computes `false` for that item_type (fixing rows that were only ever left at
+the schema default, never actually decided), but an existing `false` is always left alone (the
+schema default is `true`, so a `false` can only exist because something deliberately set it —
+e.g. dev_placeholder_dishes.sql's non-rice/curd staple exceptions — and this systematic pass
+shouldn't clobber that judgment). See `ingest()`'s own SQL comment for the exact CASE logic.
 
 Usage:
   python supabase/seed/ingest_catalog.py path/to/Tamil_Nadu_Dishes_Master_Catalogue_Claude.xlsx [--dry-run]
@@ -212,7 +215,22 @@ def ingest(conn: psycopg.Connection, candidates: list[Candidate], report: Report
                     veg_or_nonveg = excluded.veg_or_nonveg,
                     region_style = excluded.region_style,
                     meat_type = excluded.meat_type,
-                    dietary_flags = excluded.dietary_flags
+                    dietary_flags = excluded.dietary_flags,
+                    -- PR #12 review finding: the original version never touched track_variety on
+                    -- conflict at all, so the 553 workbook-only rows kept the schema default
+                    -- (true) forever, including rice/curd dishes the systematic rule computes as
+                    -- false. Fixed one-directionally: only ever correct true -> false (an
+                    -- unset-default value drifting to what the systematic rule says it should be),
+                    -- never false -> true. A `false` can only exist here because something
+                    -- deliberately set it — the schema default is `true` — so it's safe to treat
+                    -- any existing `false` as a real hand-curated override (e.g.
+                    -- dev_placeholder_dishes.sql's murukku/payasam exceptions) and leave it alone,
+                    -- while still fixing every dish that was silently left at the wrong default.
+                    track_variety = case
+                        when dishes.track_variety = true and excluded.track_variety = false
+                            then excluded.track_variety
+                        else dishes.track_variety
+                    end
                 returning (xmax = 0) as inserted
                 """,
                 (

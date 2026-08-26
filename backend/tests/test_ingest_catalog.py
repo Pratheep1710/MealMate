@@ -189,15 +189,17 @@ class TestIngestIdempotency:
         row_count_after_second = conn.execute("select count(*) as n from dishes").fetchone()["n"]
         assert row_count_after_second == 2
 
-    def test_a_re_run_refreshes_taxonomy_but_leaves_track_variety_alone(
+    def test_a_re_run_corrects_track_variety_left_at_the_unset_schema_default(
         self, conn, clean_dishes
     ) -> None:
+        # PR #12 review finding: the original version never touched track_variety on conflict at
+        # all, so a rice dish that was only ever left at the schema default (`true` — nobody
+        # actually decided it) stayed wrong forever. A pre-existing `true` for an item_type the
+        # systematic rule says should be `false` must now get corrected.
         conn.execute(
             "insert into dishes (name, item_type, veg_or_nonveg, track_variety) "
             "values ('Existing Rice Dish', 'rice', 'veg', true)"
         )
-        # Hand-curated override: this dish was manually marked track_variety=true even though the
-        # systematic rule for item_type='rice' is false — the pipeline must not overwrite it.
         path = _workbook(
             [_row(family="Rice dish", name="Existing Rice Dish", main_ingredients="Milk")]
         )
@@ -208,8 +210,32 @@ class TestIngestIdempotency:
         row = conn.execute(
             "select track_variety, dietary_flags from dishes where name = 'Existing Rice Dish'"
         ).fetchone()
-        assert row["track_variety"] is True  # untouched
+        assert row["track_variety"] is False  # corrected — was only ever an unset default
         assert "Milk-Dairy" in row["dietary_flags"]  # taxonomy still refreshed from the workbook
+
+    def test_a_re_run_preserves_a_deliberately_curated_false_track_variety(
+        self, conn, clean_dishes
+    ) -> None:
+        # A pre-existing `false` can only exist because something deliberately set it — the schema
+        # default is `true` — so it must never be clobbered back to `true`, even when the
+        # systematic rule for this item_type would compute `true` (e.g. dev_placeholder_dishes.sql
+        # marks murukku/payasam false by editorial judgment despite their item_type not being
+        # rice/curd).
+        conn.execute(
+            "insert into dishes (name, item_type, veg_or_nonveg, track_variety) "
+            "values ('Existing Snack Dish', 'snack', 'veg', false)"
+        )
+        path = _workbook(
+            [_row(family="Snack", name="Existing Snack Dish", main_ingredients="Rice flour")]
+        )
+        candidates, report = ingest_catalog.load_candidates(path)
+
+        ingest_catalog.ingest(conn, candidates, report, dry_run=False)
+
+        row = conn.execute(
+            "select track_variety from dishes where name = 'Existing Snack Dish'"
+        ).fetchone()
+        assert row["track_variety"] is False  # preserved — a curated override, not a default
 
     def test_dry_run_does_not_commit(self, conn, clean_dishes) -> None:
         path = _workbook([_row(name="Dry Run Dish")])

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import uuid
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from app.models.day_names import normalize_day_name
+from app.models.dish import DIETARY_FLAG_VALUES
 
 
 class UserProfile(BaseModel):
@@ -18,6 +19,21 @@ class UserProfile(BaseModel):
     planning_mode: str
     grocery_day: str
     timezone: str
+
+    @field_validator("dietary_restrictions")
+    @classmethod
+    def _restrictions_are_in_the_controlled_vocabulary(cls, value: list[str]) -> list[str]:
+        # Must match dishes.dietary_flags' vocabulary exactly (DIETARY_FLAG_VALUES) — array-overlap
+        # hard exclusion (catalog_repo.get_candidates) is case-sensitive, so a profile value that
+        # drifts from this (e.g. "nuts" instead of "Nuts") would silently never exclude a matching
+        # dish. Enforced again at the DB level by user_profiles_dietary_restrictions_valid (0017)
+        # for writes that don't pass through this model.
+        invalid = [v for v in value if v not in DIETARY_FLAG_VALUES]
+        if invalid:
+            raise ValueError(
+                f"dietary_restrictions contains values outside the controlled vocabulary: {invalid}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _nonveg_count_matches_pattern(self) -> UserProfile:

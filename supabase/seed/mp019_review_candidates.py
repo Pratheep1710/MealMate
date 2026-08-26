@@ -10,10 +10,14 @@ Two checks:
      Kongunadu version of the same base dish are both legitimate, not duplicates) alongside actual
      accidental repeats — the heuristic can't tell those apart, which is exactly why this is a
      candidate list for a human, not an auto-dedup.
-  2. Non-Tamil-Nadu-specific sourcing: rows whose workbook Source URL is a generic "South Indian"
-     collection rather than a Tamil-Nadu-specific one, per MP-003's regional gate ("reject
-     anything only generically South Indian"). Flagged for citation review, not necessarily
-     removal — see the note printed with each group.
+  2. Non-Tamil-Nadu-specific sourcing: rows whose workbook Source URL doesn't read as
+     Tamil-Nadu-specific, per MP-003's regional gate ("every selected dish traceable to a Tamil
+     Nadu source... reject anything only generically South Indian"). PR #12 review finding: an
+     earlier version only matched URLs literally containing "south-indian", silently skipping rows
+     with no source URL at all — a missing citation is *worse* than a generic one for a
+     traceability requirement, not something to ignore. Flags a row if its Source URL is missing,
+     blank, or simply doesn't mention Tamil Nadu at all — flagged for citation review, not
+     necessarily removal — see the note printed with each group.
 
 Usage:
   python supabase/seed/mp019_review_candidates.py path/to/Tamil_Nadu_Dishes_Master_Catalogue_Claude.xlsx
@@ -46,15 +50,20 @@ def find_near_duplicates(rows: list[tuple]) -> dict[tuple[str, str], list[str]]:
     return {k: v for k, v in groups.items() if len(v) > 1}
 
 
-def find_generic_sourced(rows: list[tuple]) -> list[tuple[str, str]]:
-    """rows: (name, source_url) pairs. Flags URLs whose path reads as "south indian" rather than
-    Tamil-Nadu-specific — a citation-specificity check, not a claim the dish itself is foreign.
+def find_non_tamil_specific_sourced(rows: list[tuple]) -> list[tuple[str, str | None]]:
+    """rows: (name, source_url) pairs. Flags a row if its source doesn't establish Tamil-Nadu
+    traceability at all: missing/blank, or present but not mentioning Tamil Nadu — a
+    citation-specificity/completeness check, not a claim the dish itself is foreign. A missing URL
+    is flagged (not skipped): MP-003's regional gate is a traceability requirement, and "no
+    citation" is a stronger failure of that than "generic citation".
     """
-    return [
-        (name, url)
-        for name, url in rows
-        if url and "south-indian" in url.lower() and "tamil" not in url.lower()
-    ]
+    flagged = []
+    for name, url in rows:
+        if not url or not str(url).strip():
+            flagged.append((name, None))
+        elif "tamil" not in str(url).lower():
+            flagged.append((name, url))
+    return flagged
 
 
 def main() -> int:
@@ -70,7 +79,7 @@ def main() -> int:
     dupes = find_near_duplicates(dup_input)
 
     source_input = [(r[5], r[12]) for r in all_rows if r[5]]
-    generic_sourced = find_generic_sourced(source_input)
+    flagged_sources = find_non_tamil_specific_sourced(source_input)
 
     print(f"{len(all_rows)} total rows in the workbook.\n")
 
@@ -80,14 +89,22 @@ def main() -> int:
     for (item_type, _norm), names in sorted(dupes.items()):
         print(f"  [{item_type}] " + " / ".join(names))
 
-    print(f"\n== Generically-sourced candidates ({len(generic_sourced)} row(s)) ==")
-    print("Source URL reads as a generic 'South Indian' collection rather than Tamil-Nadu-")
-    print("specific (MP-003's regional gate). Most of these are still clearly Tamil-coded by name")
-    print("(Chettinad/Kongunadu prefixes, Tamil terms) — this flags a citation-specificity gap,")
-    print("not a claim that the dish itself isn't Tamil Nadu cuisine. Review and either accept the")
-    print("citation, find a more specific source, or remove.\n")
-    for name, url in generic_sourced:
-        print(f"  - {name}  ({url})")
+    missing = [n for n, u in flagged_sources if u is None]
+    non_tamil = [(n, u) for n, u in flagged_sources if u is not None]
+    print(f"\n== Sourcing candidates ({len(flagged_sources)} row(s)) ==")
+    print("Rows whose Source URL doesn't establish Tamil-Nadu traceability (MP-003's regional")
+    print("gate) — either missing entirely, or present but not mentioning Tamil Nadu. Most of the")
+    print("latter are still clearly Tamil-coded by name (Chettinad/Kongunadu prefixes, Tamil")
+    print("terms) — this flags a citation gap, not a claim the dish itself isn't Tamil Nadu")
+    print("cuisine. Review and either accept, find a more specific source, or remove.\n")
+    if missing:
+        print(f"  -- {len(missing)} row(s) with NO source URL at all --")
+        for name in missing:
+            print(f"  - {name}  (no source URL)")
+    if non_tamil:
+        print(f"  -- {len(non_tamil)} row(s) with a source URL that doesn't mention Tamil Nadu --")
+        for name, url in non_tamil:
+            print(f"  - {name}  ({url})")
 
     return 0
 

@@ -56,7 +56,7 @@ class TestProfilesRepository:
             id=user_id,
             nonveg_days_per_week=2,
             nonveg_day_pattern=["wed", "sat"],
-            dietary_restrictions=["dairy"],
+            dietary_restrictions=["Milk-Dairy"],
             dinner_style="tiffin",
             planning_mode="reserves",
             grocery_day="sunday",
@@ -67,7 +67,7 @@ class TestProfilesRepository:
         fetched = profiles_repo.get_profile(conn, user_id)
         assert fetched is not None
         assert fetched.dinner_style == "tiffin"
-        assert fetched.dietary_restrictions == ["dairy"]
+        assert fetched.dietary_restrictions == ["Milk-Dairy"]
 
     def test_get_profile_returns_none_for_unknown_user(self, conn):
         assert profiles_repo.get_profile(conn, uuid.uuid4()) is None
@@ -136,6 +136,38 @@ class TestCatalogRepository:
         )
 
         assert [c.name for c in candidates] == ["No Dairy"]
+
+    def test_a_real_user_profiles_dietary_restrictions_actually_excludes_a_matching_dish(
+        self, conn, make_user
+    ):
+        # PR #12 review finding: dishes.dietary_flags and user_profiles.dietary_restrictions must
+        # carry identical casing for the array-overlap hard exclusion to work at all — this proves
+        # the full round trip end-to-end (a real UserProfile written through the repository, then
+        # its own dietary_restrictions value used to exclude candidates), not just that the two
+        # vocabularies are independently constrained to the same list.
+        user_id = make_user()
+        profile = UserProfile(
+            id=user_id,
+            nonveg_days_per_week=None,
+            nonveg_day_pattern=None,
+            dietary_restrictions=["Nuts"],
+            dinner_style="rice",
+            planning_mode="suggestion",
+            grocery_day="monday",
+            timezone="Asia/Kolkata",
+        )
+        profiles_repo.upsert_profile(conn, profile)
+        fetched = profiles_repo.get_profile(conn, user_id)
+        assert fetched is not None
+
+        _insert_dish(conn, name="Cashew Payasam", item_type="sweet", dietary_flags=["Nuts"])
+        _insert_dish(conn, name="Plain Payasam", item_type="sweet", dietary_flags=[])
+
+        candidates = catalog_repo.get_candidates(
+            conn, item_type="sweet", exclude_dietary_flags=fetched.dietary_restrictions
+        )
+
+        assert [c.name for c in candidates] == ["Plain Payasam"]
 
     def test_get_candidates_excludes_given_dish_ids(self, conn):
         keep_id = _insert_dish(conn, name="Keep", item_type="rice")

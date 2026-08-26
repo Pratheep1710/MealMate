@@ -18,6 +18,21 @@ around: `infer_meat_type`/`infer_dietary_flags` below never touch prep_minutes, 
 
 from __future__ import annotations
 
+import re
+
+
+def _contains(haystack: str, keyword: str) -> bool:
+    """Word/phrase-boundary match, not a raw substring check (PR #12 review finding: naive `in`
+    matching let "til" match inside "lentil", "egg" match inside "eggplant", and "atta" match
+    inside "pattani" — all real false positives against this catalogue's actual ingredient text,
+    each capable of wrongly tagging a safe dish with an allergen flag it doesn't contain). `\\b` is
+    Postgres-regex-free Python `re`'s word-boundary — zero-width, anchors on transitions between
+    `\\w` and non-`\\w`, so it rejects a match that's merely embedded inside a longer word on
+    either side while still matching multi-word keyword phrases (e.g. "seer fish") whole.
+    """
+    return re.search(rf"\b{re.escape(keyword)}\b", haystack) is not None
+
+
 FAMILY_TO_ITEM_TYPE: dict[str, str] = {
     "Snack": "snack",
     "Kuzhambu": "gravy",
@@ -53,12 +68,16 @@ NO_VARIETY_ITEM_TYPES = frozenset({"rice", "curd"})
 
 MEAT_TYPE_VALUES = ("chicken", "mutton", "fish", "seafood", "other")
 
-# Ordered: checked as substrings, most-specific first, against Main Ingredient(s) text alone in
-# pass 1. "kozhi"/"meen" are Tamil for chicken/fish and are common enough in this workbook's Main
-# Ingredient(s) column (e.g. "Country chicken", "Nattukozhi") to need covering directly rather than
-# only via the English word.
+# Ordered: checked word/phrase-boundary (not raw substring — see _contains), most-specific first,
+# against Main Ingredient(s) text alone in pass 1. "kozhi"/"meen" are Tamil for chicken/fish and are
+# common enough in this workbook's Main Ingredient(s) column to need covering directly rather than
+# only via the English word. "nattukozhi" ("country chicken") is listed separately from "kozhi" —
+# it's one concatenated Tamil compound word with no internal space, so boundary matching on "kozhi"
+# alone can't find it inside "nattukozhi" (that's exactly the class of match `_contains` exists to
+# reject when it's an *accidental* substring — this one just needs its own whole-word entry instead).
 _MEAT_TYPE_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("chicken", "chicken"),
+    ("nattukozhi", "chicken"),
     ("kozhi", "chicken"),
     ("mutton", "mutton"),
     ("goat", "mutton"),
@@ -102,7 +121,7 @@ def infer_meat_type(*, diet: str, subfamily: str | None, name: str, main_ingredi
     main_ingredients = main_ingredients or ""
     haystack_specific = main_ingredients.lower()
     for keyword, meat_type in _MEAT_TYPE_KEYWORDS:
-        if keyword in haystack_specific:
+        if _contains(haystack_specific, keyword):
             return meat_type, False
 
     # Main Ingredient(s) alone didn't resolve it (e.g. "dal/rice spice profile") — widen to
@@ -111,11 +130,11 @@ def infer_meat_type(*, diet: str, subfamily: str | None, name: str, main_ingredi
     # already correctly says is "Turkey") can't override a real ingredient-column answer.
     haystack_wide = f"{subfamily or ''} {name}".lower()
     for keyword, meat_type in _MEAT_TYPE_KEYWORDS:
-        if keyword in haystack_wide:
+        if _contains(haystack_wide, keyword):
             return meat_type, False
 
     for keyword in _MEAT_TYPE_GENERIC_KEYWORDS:
-        if keyword in haystack_specific or keyword in haystack_wide:
+        if _contains(haystack_specific, keyword) or _contains(haystack_wide, keyword):
             return "other", True
 
     return None, False
@@ -160,7 +179,11 @@ def infer_dietary_flags(
         part for part in (main_ingredients, subfamily, name) if part
     ).lower()
 
-    flags = [flag for flag, keywords in _DIETARY_FLAG_KEYWORDS.items() if any(k in haystack for k in keywords)]
+    flags = [
+        flag
+        for flag, keywords in _DIETARY_FLAG_KEYWORDS.items()
+        if any(_contains(haystack, k) for k in keywords)
+    ]
 
     # Parotta is inherently wheat-flour dough — the catalogue's Main Ingredient(s) text for
     # non-veg parotta rows (e.g. "Parotta + meat + salna") never spells out "wheat", so the keyword
