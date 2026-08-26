@@ -1,4 +1,4 @@
-# Meal Planner — Phase 1
+# Meal Planner — v1 implementation
 
 Tamil Nadu meal-planning app. Personal/family use v1, built to scale to multi-user without a schema
 rework. See `docs/` for the functional/technical specs and the decision records this phase produced.
@@ -41,7 +41,7 @@ npm test       # smoke test
 
 ## Current status
 
-Blocks A and B are done against a live Supabase project (`kuctkvxegfaqemosmtcs`, ap-southeast-2) —
-schema + RLS applied and verified, config module wired to real credentials. Block C (mobile
-scaffold) is done and boots. The one open item is MP-012's live sign-in test, which needs a
-confirmed test user — see `docs/MP-006-MP-012-supabase-setup.md`.
+Foundation, mobile shell/live plan views, push notifications, the curated catalog pipeline, and
+the Phase 6 weekly generation engine are implemented. See
+`docs/MP-034-044-generation-engine.md` for the generation lifecycle, verification, and the
+remaining per-dish ingredient-data limitation affecting live grocery/Reserves richness.

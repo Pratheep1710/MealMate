@@ -3,7 +3,7 @@
 Every event logged through get_logger() is emitted as one JSON line carrying whatever
 job/user/week correlation context is currently bound (see correlation_context()), and every field
 value — context and per-call alike — passes through redact() first. That makes this module the
-single choke point MP-040 (the OpenAI call, next phase) will log through by default: raw
+single choke point MP-040's OpenAI call logs through by default: raw
 prompt/user-context payloads can't reach a log sink unscrubbed, because there's no logging path
 here that skips redact().
 """

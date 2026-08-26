@@ -18,8 +18,9 @@ def run_weekly_generation(
     conn: psycopg.Connection[DictRow], user_id: uuid.UUID, week_start: datetime.date
 ) -> GenerationJob:
     """Claims (or returns the existing) generation_jobs row for this (user, week) — idempotent
-    per the table's unique constraint — under correlation-scoped logging. The candidate-filtered
-    generation call itself is M4 scope; this stops at a claimed job row.
+    per the table's unique constraint — under correlation-scoped logging. The complete Phase 6
+    path uses app/services/generation_engine.py; this lower-level helper remains the cheap
+    idempotent ensure-row operation used by earlier callers and tests.
     """
     with correlation_context(user_id=str(user_id), week_start=week_start.isoformat()):
         job = jobs_repo.claim_or_create_job(conn, user_id, week_start)

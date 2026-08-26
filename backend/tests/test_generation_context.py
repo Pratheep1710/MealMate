@@ -10,7 +10,7 @@ import pytest
 
 from app.models import Dish, UserProfile
 from app.services import generation_context
-from app.services.generation_context import build_generation_context
+from app.services.generation_context import _evenly_spaced_dates, build_generation_context
 from app.services.slot_templates import GENERATION_ITEM_TYPES, templates_for_profile
 
 _WEEK_START = datetime.date(2026, 8, 24)
@@ -55,6 +55,15 @@ def _wire_context_dependencies(
     monkeypatch.setattr(
         generation_context.profiles_repo, "get_profile", lambda conn, user_id: profile
     )
+    monkeypatch.setattr(
+        generation_context.profiles_repo, "list_favorite_dish_ids", lambda conn, user_id: []
+    )
+    monkeypatch.setattr(
+        generation_context.history_repo, "get_dish_last_used_dates", lambda *args: {}
+    )
+    monkeypatch.setattr(
+        generation_context.history_repo, "get_nonveg_plan_dates", lambda *args: set()
+    )
 
     def get_candidates(conn: object, **kwargs: Any) -> list[Dish]:
         catalog_calls.append(kwargs)
@@ -67,6 +76,11 @@ def _wire_context_dependencies(
         return available or []
 
     monkeypatch.setattr(generation_context.catalog_repo, "get_candidates", get_candidates)
+    monkeypatch.setattr(
+        generation_context.catalog_repo,
+        "get_reserves_eligible_dish_ids",
+        lambda conn, candidate_ids, available_ids: candidate_ids,
+    )
     monkeypatch.setattr(
         generation_context, "get_variety_exclusion_set", lambda *args: recent or set()
     )
@@ -114,6 +128,15 @@ def test_catalog_groups_have_deterministic_name_then_id_order(
     profile = _profile()
     monkeypatch.setattr(
         generation_context.profiles_repo, "get_profile", lambda conn, user_id: profile
+    )
+    monkeypatch.setattr(
+        generation_context.profiles_repo, "list_favorite_dish_ids", lambda conn, user_id: []
+    )
+    monkeypatch.setattr(
+        generation_context.history_repo, "get_dish_last_used_dates", lambda *args: {}
+    )
+    monkeypatch.setattr(
+        generation_context.history_repo, "get_nonveg_plan_dates", lambda *args: set()
     )
     dish_b = _dish("tiffin").model_copy(update={"name": "Zulu"})
     dish_a = _dish("tiffin").model_copy(update={"name": "alpha"})
@@ -202,3 +225,9 @@ def test_missing_profile_fails_before_catalog_or_history_queries(
 
     with pytest.raises(ValueError, match="profile"):
         build_generation_context(object(), uuid.uuid4(), _WEEK_START)  # type: ignore[arg-type]
+
+
+def test_count_only_nonveg_dates_are_evenly_spaced_and_deterministic() -> None:
+    dates = tuple(_WEEK_START + datetime.timedelta(days=offset) for offset in range(7))
+    assert _evenly_spaced_dates(dates, 2) == frozenset({dates[1], dates[5]})
+    assert _evenly_spaced_dates(dates, 2) == _evenly_spaced_dates(dates, 2)

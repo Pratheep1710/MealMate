@@ -4,8 +4,8 @@ generation (one LLM call/week/user), constrained to a pre-filtered candidate cat
 completeness — not the 6 business criteria themselves (candidate membership, no-repeat, dietary,
 quota, etc.), which belong to MP-041-044.
 
-Not wired to an actual OpenAI call — that's MP-040, blocked on `OPENAI_MODEL` being set and on
-MP-038/039 (both catalog-blocked). This is the contract only.
+Phase 6 wires this contract to the OpenAI Responses API in
+app/services/openai_generation.py; the six business checks remain in menu_validation.py.
 """
 
 from __future__ import annotations

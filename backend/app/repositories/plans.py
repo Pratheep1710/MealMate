@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import uuid
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -32,6 +33,15 @@ class DaySlotSummary:
     slot: str
     is_skipped: bool
     dish_names: list[str]
+
+
+@dataclasses.dataclass(frozen=True)
+class GroceryIngredientRow:
+    ingredient_id: uuid.UUID
+    name: str
+    is_staple: bool
+    quantity: Decimal | None
+    unit: str | None
 
 
 def get_week_plan(
@@ -117,6 +127,61 @@ def get_plan_items(conn: psycopg.Connection[DictRow], plan_id: uuid.UUID) -> lis
     return [PlanItem.model_validate(row) for row in rows]
 
 
+def clear_plan_items_for_dates(
+    conn: psycopg.Connection[DictRow],
+    user_id: uuid.UUID,
+    plan_dates: list[datetime.date],
+) -> None:
+    """Clears only regenerated dates, preserving earlier days in a partial-week replan."""
+    if not plan_dates:
+        return
+    conn.execute(
+        """
+        delete from plan_items pi
+        using meal_plans mp
+        where pi.plan_id = mp.id
+          and mp.user_id = %s
+          and mp.plan_date = any(%s)
+        """,
+        (user_id, plan_dates),
+    )
+    conn.execute(
+        """
+        update meal_plans
+        set is_skipped = false
+        where user_id = %s and plan_date = any(%s)
+        """,
+        (user_id, plan_dates),
+    )
+
+
+def get_grocery_ingredient_rows(
+    conn: psycopg.Connection[DictRow],
+    user_id: uuid.UUID,
+    plan_dates: list[datetime.date],
+) -> list[GroceryIngredientRow]:
+    """Ingredient occurrences for exactly the dates being snapshotted."""
+    if not plan_dates:
+        return []
+    rows = conn.execute(
+        """
+        select i.id as ingredient_id, i.canonical_name as name, i.is_staple,
+               di.quantity, di.unit
+        from meal_plans mp
+        join plan_items pi on pi.plan_id = mp.id
+        join dish_ingredients di on di.dish_id = pi.dish_id
+        join ingredients i on i.id = di.ingredient_id
+        where mp.user_id = %s
+          and mp.plan_date = any(%s)
+          and mp.is_skipped = false
+          and pi.status = 'filled'
+        order by i.canonical_name, i.id, di.unit nulls first
+        """,
+        (user_id, plan_dates),
+    ).fetchall()
+    return [GroceryIngredientRow(**row) for row in rows]
+
+
 def add_plan_item(
     conn: psycopg.Connection[DictRow],
     plan_id: uuid.UUID,
@@ -189,7 +254,9 @@ def write_grocery_snapshot(
         f"""
         insert into grocery_list_snapshot (user_id, week_start, ingredients)
         values (%s, %s, %s)
-        on conflict (user_id, week_start) do update set ingredients = excluded.ingredients
+        on conflict (user_id, week_start) do update set
+            ingredients = excluded.ingredients,
+            created_at = now()
         returning {_SNAPSHOT_COLUMNS}
         """,
         (user_id, week_start, Json(ingredients)),
