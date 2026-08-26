@@ -33,3 +33,19 @@ jest.mock('expo-splash-screen', () => ({
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
+
+// MP-068: expo-notifications registers a real native event listener as an import-time side
+// effect (DevicePushTokenAutoRegistration), which both logs a noisy "removed from Expo Go" warning
+// under Jest and was observed to occasionally leave a handle open long enough to flake a test run
+// ("A worker process has failed to exit gracefully"). Neither device push tokens nor real
+// permission prompts exist in the Jest environment anyway, so this is mocked globally the same way
+// expo-font/expo-splash-screen are — individual test files (e.g. pushRegistration.test.ts) still
+// override this with their own more detailed jest.mock() when they need to assert on call args.
+jest.mock('expo-device', () => ({ isDevice: false }));
+jest.mock('expo-notifications', () => ({
+  getPermissionsAsync: () => Promise.resolve({ status: 'undetermined' }),
+  requestPermissionsAsync: () => Promise.resolve({ status: 'undetermined' }),
+  getExpoPushTokenAsync: () => Promise.resolve({ data: '' }),
+  setNotificationChannelAsync: () => Promise.resolve(),
+  AndroidImportance: { MAX: 5 },
+}));

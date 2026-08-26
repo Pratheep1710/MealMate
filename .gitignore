@@ -15,6 +15,9 @@ web-build/
 .env.local
 *.env
 !.env.example
+# Firebase client config (MP-068) — gitleaks flags its API key (gcp-api-key rule); stored via EAS's
+# file-type environment variables instead (see docs/MP-068-070-push-notifications.md).
+mobile/google-services.json
 
 # OS
 .DS_Store

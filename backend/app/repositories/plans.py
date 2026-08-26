@@ -7,6 +7,7 @@ is frozen at "week ready" time by the generation job only (docs/MP-001 "Grocery 
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 from typing import Any
@@ -22,6 +23,17 @@ _ITEM_COLUMNS = "id, plan_id, item_type, dish_id, status, make_extra"
 _SNAPSHOT_COLUMNS = "user_id, week_start, ingredients, created_at"
 
 
+@dataclasses.dataclass(frozen=True)
+class DaySlotSummary:
+    """A read-shape for MP-070's reminder copy — not a table mirror (see app/models/__init__.py's
+    one-class-per-table convention), so it lives here rather than in app/models.
+    """
+
+    slot: str
+    is_skipped: bool
+    dish_names: list[str]
+
+
 def get_week_plan(
     conn: psycopg.Connection[DictRow], user_id: uuid.UUID, week_start: datetime.date
 ) -> list[MealPlan]:
@@ -35,6 +47,36 @@ def get_week_plan(
         (user_id, week_start, week_end),
     ).fetchall()
     return [MealPlan.model_validate(row) for row in rows]
+
+
+def get_day_plan_with_dishes(
+    conn: psycopg.Connection[DictRow], user_id: uuid.UUID, plan_date: datetime.date
+) -> list[DaySlotSummary]:
+    """One row per slot for `plan_date`, each carrying the dish name(s) currently filled in —
+    reflecting whatever the user has edited/skipped since generation, since there is only ever one
+    live `meal_plans`/`plan_items` row (docs/MP-001: "every edit autosaves and is immediately
+    live"). MP-070's reminder job reads this the evening before, not a frozen generation-time copy.
+    """
+    rows = conn.execute(
+        """
+        select mp.slot, mp.is_skipped, d.name as dish_name
+        from meal_plans mp
+        left join plan_items pi on pi.plan_id = mp.id and pi.status = 'filled'
+        left join dishes d on d.id = pi.dish_id
+        where mp.user_id = %s and mp.plan_date = %s
+        order by mp.slot
+        """,
+        (user_id, plan_date),
+    ).fetchall()
+
+    by_slot: dict[str, DaySlotSummary] = {}
+    for row in rows:
+        slot = row["slot"]
+        if slot not in by_slot:
+            by_slot[slot] = DaySlotSummary(slot=slot, is_skipped=row["is_skipped"], dish_names=[])
+        if row["dish_name"]:
+            by_slot[slot].dish_names.append(row["dish_name"])
+    return list(by_slot.values())
 
 
 def create_plan_day(

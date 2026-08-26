@@ -2,6 +2,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { ListTabIcon, PersonTabIcon, WeekTabIcon } from '../components/icons';
+import { usePushRegistration } from '../lib/usePushRegistration';
 import { DayReviewEditScreen } from '../screens/DayReviewEditScreen';
 import { GroceryListScreen } from '../screens/GroceryListScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
@@ -53,6 +54,8 @@ function SettingsStackNavigator() {
 }
 
 export function MainTabNavigator() {
+  usePushRegistration();
+
   return (
     <Tab.Navigator
       screenOptions={{

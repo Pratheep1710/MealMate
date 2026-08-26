@@ -10,6 +10,7 @@ from app.models.job import GenerationJob
 from app.models.notification import NotificationLog
 from app.models.plan import MealPlan, PlanItem
 from app.models.profile import UserFavoriteDish, UserProfile
+from app.models.push_token import PushToken
 
 __all__ = [
     "AvailableIngredient",
@@ -22,6 +23,7 @@ __all__ = [
     "MealPlan",
     "NotificationLog",
     "PlanItem",
+    "PushToken",
     "UserFavoriteDish",
     "UserProfile",
 ]

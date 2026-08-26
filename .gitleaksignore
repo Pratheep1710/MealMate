@@ -1,0 +1,7 @@
+# MP-068: mobile/google-services.json was briefly committed in d94c3ae before being moved to an
+# EAS file-type environment variable in a5fb033 (see docs/MP-068-070-push-notifications.md). The
+# flagged value is a Firebase client API key — per Google's own guidance this key type is safe to
+# expose (protected by Firebase API restrictions/security rules, not secrecy), but it's removed
+# from the repo going forward regardless. This entry only silences that one already-remediated
+# historical finding; it does not exempt this file or path from future scans.
+d94c3ae6e3f4490080ffaa50007251e42849f352:mobile/google-services.json:gcp-api-key:18

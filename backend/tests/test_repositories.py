@@ -17,6 +17,7 @@ from app.repositories import jobs as jobs_repo
 from app.repositories import notifications as notifications_repo
 from app.repositories import plans as plans_repo
 from app.repositories import profiles as profiles_repo
+from app.repositories import push_tokens as push_tokens_repo
 from app.services import variety_exclusion as variety_exclusion_service
 
 
@@ -409,6 +410,33 @@ class TestPlansRepository:
         skipped = plans_repo.set_plan_skipped(conn, plan.id, True)
         assert skipped.is_skipped is True
 
+    def test_get_day_plan_with_dishes_reflects_current_items_and_skip_state(self, conn, make_user):
+        """MP-070's read path: must reflect whatever's live right now (post-edit/post-skip), not a
+        frozen generation-time copy — there's only ever one live meal_plans/plan_items row.
+        """
+        user_id = make_user()
+        plan_date = datetime.date(2026, 8, 25)
+        rice = _insert_dish(conn, name="Steamed Rice", item_type="rice")
+        gravy = _insert_dish(conn, name="Sambar", item_type="gravy")
+
+        night = plans_repo.create_plan_day(conn, user_id, plan_date, "night")
+        plans_repo.add_plan_item(conn, night.id, "rice", rice)
+        plans_repo.add_plan_item(conn, night.id, "gravy", gravy)
+        morning = plans_repo.create_plan_day(conn, user_id, plan_date, "morning")
+        plans_repo.set_plan_skipped(conn, morning.id, True)
+
+        summary = plans_repo.get_day_plan_with_dishes(conn, user_id, plan_date)
+        by_slot = {row.slot: row for row in summary}
+
+        assert set(by_slot["night"].dish_names) == {"Steamed Rice", "Sambar"}
+        assert by_slot["night"].is_skipped is False
+        assert by_slot["morning"].is_skipped is True
+        assert by_slot["morning"].dish_names == []
+
+    def test_get_day_plan_with_dishes_empty_for_a_date_with_no_plan(self, conn, make_user):
+        user_id = make_user()
+        assert plans_repo.get_day_plan_with_dishes(conn, user_id, datetime.date(2026, 9, 1)) == []
+
     def test_add_plan_item_supports_needs_manual_pick_with_no_dish(self, conn, make_user):
         """Technical spec §5.1 step 5's fallback state: zero eligible candidates even after
         relaxing the 10-day rule must surface as `needs_manual_pick`, never a blank/invented dish.
@@ -551,3 +579,42 @@ class TestNotificationsRepository:
 
         assert len(results) == 1
         assert results[0].notification_type == "daily_reminder"
+
+
+class TestPushTokensRepository:
+    def test_list_tokens_for_user_scopes_by_user(self, conn, make_user):
+        user_a = make_user()
+        user_b = make_user()
+        conn.execute(
+            "insert into push_tokens (user_id, expo_push_token) values (%s, %s)",
+            (user_a, "ExponentPushToken[a1]"),
+        )
+        conn.execute(
+            "insert into push_tokens (user_id, expo_push_token) values (%s, %s)",
+            (user_b, "ExponentPushToken[b1]"),
+        )
+
+        tokens = push_tokens_repo.list_tokens_for_user(conn, user_a)
+
+        assert [t.expo_push_token for t in tokens] == ["ExponentPushToken[a1]"]
+
+    def test_list_users_with_tokens_returns_distinct_users(self, conn, make_user):
+        user_a = make_user()
+        user_b = make_user()
+        make_user()  # no token — must not appear below
+        conn.execute(
+            "insert into push_tokens (user_id, expo_push_token) values (%s, %s)",
+            (user_a, "ExponentPushToken[a1]"),
+        )
+        conn.execute(
+            "insert into push_tokens (user_id, expo_push_token) values (%s, %s)",
+            (user_a, "ExponentPushToken[a2]"),
+        )
+        conn.execute(
+            "insert into push_tokens (user_id, expo_push_token) values (%s, %s)",
+            (user_b, "ExponentPushToken[b1]"),
+        )
+
+        users = push_tokens_repo.list_users_with_tokens(conn)
+
+        assert set(users) == {user_a, user_b}

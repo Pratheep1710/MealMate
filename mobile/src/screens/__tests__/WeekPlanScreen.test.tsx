@@ -21,13 +21,26 @@ jest.mock('../../contexts/SessionContext', () => ({
   useSession: () => mockUseSession(),
 }));
 
-function chainable(result: { data: unknown; error: unknown }) {
+function chainable(
+  result: { data: unknown; error: unknown },
+  updateResult: { error: unknown } = { error: null },
+) {
   const builder: Record<string, unknown> = {};
   for (const method of ['select', 'gte', 'lte', 'eq', 'in', 'order']) {
     builder[method] = jest.fn(() => builder);
   }
   builder.then = (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
     Promise.resolve(result).then(resolve, reject);
+
+  // MP-061: the skip toggle writes via .update(...).eq('id', planId) — a separate sub-builder so
+  // its resolved value (updateResult) doesn't collide with the read chain's `result` above.
+  const updateBuilder: Record<string, unknown> = {
+    eq: jest.fn(() => updateBuilder),
+    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve(updateResult).then(resolve, reject),
+  };
+  builder.update = jest.fn(() => updateBuilder);
+  builder.__updateBuilder = updateBuilder;
   return builder;
 }
 
@@ -289,5 +302,42 @@ describe('WeekPlanScreen', () => {
 
     expect(textOf(userBTree)).not.toContain('Sambar Sadam');
     expect(textOf(userBTree)).toContain("Couldn't load your plan");
+  });
+
+  // MP-061: skip/eating-out toggle — no confirmation dialog, no warning styling.
+  it('toggles a slot to skipped in one tap, with no confirmation dialog', async () => {
+    const builder = chainable({ data: [todayRow()], error: null });
+    mockFrom.mockReturnValue(builder);
+
+    const tree = await renderScreen();
+    const slotRow = tree.root.findByProps({ testID: 'slot-row-night' });
+    await act(async () => {
+      slotRow.props.onPress();
+    });
+
+    const toggleButton = tree.root.findByProps({ testID: 'skip-toggle-button' });
+    await act(async () => {
+      toggleButton.props.onPress();
+      await flushAsync();
+    });
+
+    expect(builder.update).toHaveBeenCalledWith({ is_skipped: true });
+    expect(
+      (builder as unknown as { __updateBuilder: { eq: jest.Mock } }).__updateBuilder.eq,
+    ).toHaveBeenCalledWith('id', 'plan-1');
+    expect(textOf(tree)).toContain('Cooking something of your own');
+    expect(textOf(tree)).not.toContain('confirm');
+  });
+
+  it('toggles a skipped slot back with neutral copy, not a warning', async () => {
+    mockFrom.mockReturnValue(chainable({ data: [todayRow({ is_skipped: true })], error: null }));
+
+    const tree = await renderScreen();
+    const slotRow = tree.root.findByProps({ testID: 'slot-row-night' });
+    await act(async () => {
+      slotRow.props.onPress();
+    });
+
+    expect(textOf(tree)).toContain('Actually, cooking this');
   });
 });

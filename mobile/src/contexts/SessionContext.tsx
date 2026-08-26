@@ -1,6 +1,7 @@
 import type { Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
+import { unregisterPushToken } from '../lib/pushRegistration';
 import { supabase } from '../lib/supabase';
 import { clearAllCache } from '../lib/weekCache';
 
@@ -59,6 +60,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return { error: error?.message ?? null, needsConfirmation: !error && !data.session };
       },
       signOut: async () => {
+        // Must run before auth.signOut() — unregisterPushToken needs auth.uid() to still resolve
+        // to the outgoing user (see 0014_push_token_unregister.sql).
+        await unregisterPushToken();
         await supabase.auth.signOut();
         // Prevents the next sign-in on this device (a different account) from ever reading this
         // account's cached offline data — see weekCache.ts.

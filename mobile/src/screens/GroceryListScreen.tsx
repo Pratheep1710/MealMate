@@ -10,6 +10,11 @@ import { currentWeekStart, weekDates } from '../lib/week';
 // rewritten by later edits — so ingredients required by the *current* plan but absent from the
 // frozen snapshot are shown as a separately badged addition, not merged into (or replacing) the
 // frozen list itself.
+//
+// MP-061 review fix: the inverse case — a frozen ingredient that every slot using it has since
+// been skipped for — is reconciled the same way: never removed from the frozen list (it may
+// already be bought), but badged "No longer needed" rather than left indistinguishable from
+// something still required.
 type SnapshotIngredient = { ingredient_id: string; name: string };
 
 type PlanItemDishIdRow = {
@@ -88,6 +93,12 @@ export function GroceryListScreen() {
   const [error, setError] = useState<string | null>(null);
   const [frozenList, setFrozenList] = useState<SnapshotIngredient[] | null>(null);
   const [addedSinceSnapshot, setAddedSinceSnapshot] = useState<SnapshotIngredient[]>([]);
+  // MP-061 review fix: an ingredient frozen into the snapshot can stop being required if every
+  // slot that used it is later skipped (WeekPlanScreen's "doesn't count toward the grocery list"
+  // promise) — tracked separately from frozenList rather than filtered out of it, since the
+  // snapshot itself is still frozen/never rewritten (Decisions Risks tab): already-bought items
+  // shouldn't just vanish, they should read as "no longer needed" instead.
+  const [noLongerNeeded, setNoLongerNeeded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let ignore = false;
@@ -130,6 +141,16 @@ export function GroceryListScreen() {
             }
           }
           setAddedSinceSnapshot(added);
+
+          // A frozen ingredient no longer among currentlyRequired means every unskipped dish that
+          // used it either got skipped or is otherwise gone from this week's live plan.
+          setNoLongerNeeded(
+            new Set(
+              frozenIngredients
+                .filter((i) => !currentlyRequired.has(i.ingredient_id))
+                .map((i) => i.ingredient_id),
+            ),
+          );
         }
 
         setLoading(false);
@@ -182,11 +203,21 @@ export function GroceryListScreen() {
       {frozenList.length === 0 ? (
         <Text style={styles.note}>Nothing on this week&apos;s list.</Text>
       ) : (
-        frozenList.map((ingredient) => (
-          <View key={ingredient.ingredient_id} style={styles.row} testID="grocery-item-frozen">
-            <Text style={styles.itemName}>{ingredient.name}</Text>
-          </View>
-        ))
+        frozenList.map((ingredient) => {
+          const stale = noLongerNeeded.has(ingredient.ingredient_id);
+          return (
+            <View key={ingredient.ingredient_id} style={styles.row} testID="grocery-item-frozen">
+              <Text style={[styles.itemName, stale && styles.itemNameStale]}>
+                {ingredient.name}
+              </Text>
+              {stale ? (
+                <Text style={styles.staleBadge} testID="grocery-item-no-longer-needed">
+                  No longer needed
+                </Text>
+              ) : null}
+            </View>
+          );
+        })
       )}
 
       {addedSinceSnapshot.length > 0 ? (
@@ -239,6 +270,20 @@ const styles = StyleSheet.create({
   },
   itemName: {
     fontSize: 15,
+  },
+  itemNameStale: {
+    color: '#999',
+    textDecorationLine: 'line-through',
+  },
+  staleBadge: {
+    backgroundColor: '#f1f1f1',
+    color: '#666',
+    fontSize: 11,
+    fontWeight: '600',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
   },
   addedSection: {
     marginTop: 16,

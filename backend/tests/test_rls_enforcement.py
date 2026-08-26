@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import datetime
 
+import pytest
+
 from app.repositories import plans as plans_repo
 from app.repositories import profiles as profiles_repo
 
@@ -62,3 +64,29 @@ class TestMealPlansRLS:
 
         week_plan = plans_repo.get_week_plan(conn, user_a, week_start)
         assert [p.id for p in week_plan] == [created.id]
+
+    # MP-061: skip/eating-out toggle write path (0012_meal_plans_skip_toggle_rls.sql).
+    def test_authenticated_user_can_toggle_own_is_skipped(
+        self, conn, make_user, as_authenticated_user
+    ):
+        user_a = make_user()
+        week_start = datetime.date(2026, 8, 24)
+        plan = plans_repo.create_plan_day(conn, user_a, week_start, "morning")
+
+        as_authenticated_user(user_a)
+
+        updated = plans_repo.set_plan_skipped(conn, plan.id, True)
+        assert updated.is_skipped is True
+
+    def test_authenticated_user_cannot_toggle_another_users_is_skipped(
+        self, conn, make_user, as_authenticated_user
+    ):
+        user_a = make_user()
+        user_b = make_user()
+        week_start = datetime.date(2026, 8, 24)
+        plan = plans_repo.create_plan_day(conn, user_a, week_start, "morning")
+
+        as_authenticated_user(user_b)
+
+        with pytest.raises(ValueError):
+            plans_repo.set_plan_skipped(conn, plan.id, True)
