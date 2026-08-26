@@ -6,9 +6,9 @@ workbook genuinely wasn't in the repo tree yet) — the real
 disk this phase and is what everything below runs against. Still not committed to the repo (it
 never has been) — every script here takes its path as an argument.
 
-## PR #12 review round — 5 findings, all fixed, live catalog corrected
+## PR #12 review — 2 rounds, all findings resolved, live catalog corrected
 
-Four CI-passing but real correctness/safety gaps found on first review, each fixed and re-verified
+Round 1: 5 CI-passing but real correctness/safety gaps found on review, each fixed and re-verified
 against the live database (all numbers below already reflect the corrected data, not the original
 run):
 
@@ -44,10 +44,8 @@ run):
    query per subset), reporting only the *minimal* failing combinations so a superset of an
    already-failing set doesn't bury the report in redundant noise. **This found a real, previously
    invisible gap**: `tiffin / nonveg` passes every single-flag exclusion but has zero candidates for
-   a user excluding both `Egg` and `Gluten` together — see the updated MP-020 section below.
-   MP-034's actual per-slot combo templates still don't exist, so this remains scoped to the
-   item_type × diet × flag-combination cross product, same limitation as before — just no longer
-   blind to simultaneous restrictions within that scope.
+   a user excluding both `Egg` and `Gluten` together — see the updated MP-020 section below. At
+   this point the check still had no slot dimension — see round 2 below.
 4. **[P2] MP-019's sourcing check silently skipped rows with no source URL at all**, and only
    matched the one literal phrase "south-indian". A missing citation is a *worse* failure of
    MP-003's traceability requirement than a generic one, not something to ignore. Renamed
@@ -71,6 +69,17 @@ run):
    distribution is unchanged (mutton 25 / fish 21 / chicken 18 / seafood 12 / other 6 / unresolved
    0) — the `nattukozhi` fix restored exact parity with the pre-fix numbers while now safely
    rejecting accidental matches elsewhere.
+
+**Round 2**: `[P1] MP-020 still had no slot/combo-template dimension` — round 1's multi-flag fix
+covered `item_type × veg/nonveg × restriction`, not the brief's full `slot × item_type ×
+veg/nonveg × restriction`. No spec for the slot/combo templates existed anywhere in this repo at
+that point, so rather than invent one, MP-020 was marked explicitly provisional and the question
+was brought back to Pratheep directly, who supplied the actual
+`version1_mealPlanner_functionalities.md` and `version1_mealPlanner_technical.md`. Built for real
+from those — see the updated MP-020 section below for the full sourcing (which slot mappings are
+verbatim, inferred, or deliberately left unmapped) and the reclassified result: 1 real BLOCKING
+gap (down from 4 undifferentiated ones), the other 3 reclassified as real-but-non-blocking since no
+slot template requires them.
 
 ## MP-015 — Finish mapping master catalogue to application taxonomy
 
@@ -257,68 +266,69 @@ only; it never deletes or modifies a row. Two checks, run against the real workb
 
 **No dishes were removed this phase.** Both lists above are inputs to a decision, not a decision.
 
-## MP-020 — Validate slot/combo coverage (the hard gate) — **provisional, does not yet unblock MP-034/MP-038**
+## MP-020 — Validate slot/combo coverage (the hard gate)
 
 `supabase/seed/validate_coverage.py`, run live against the catalog after MP-015/017/018 above.
 Checks every `(item_type, veg_or_nonveg)` combination the schema defines, unfiltered and under
 **every combination of simultaneous `dietary_flags` exclusions** a user could select (PR #12
-review round 1 fix — the original version only checked one flag excluded at a time; see the
-review-round section above for why that misses real gaps). 16 groups, each checked against every
-non-empty subset of the 6-flag vocabulary (up to 63 subsets, computed in memory from one fetch per
-group — not one query per subset), reporting only the *minimal* failing combinations.
+review round 1 fix — the original version only checked one flag excluded at a time). 16 groups,
+each checked against every non-empty subset of the 6-flag vocabulary (up to 63 subsets, computed
+in memory from one fetch per group — not one query per subset), reporting only the *minimal*
+failing combinations.
 
-**Missing dimension, flagged explicitly per PR #12 review round 2 — not resolved in this
-phase.** The Phase 5 brief's own AC is coverage over `slot × item_type × veg/nonveg ×
-restriction`, not just `item_type × veg/nonveg × restriction`. This validates the latter only.
-Closing that gap needs the actual slot/combo templates — which `item_type`(s) compose each of the
-6 slots (`morning`, `afternoon`, `night`, `snack_1/2/3`) — and **no such spec exists anywhere in
-this repo to build it from**: the one committed detail is a single illustrative example in
-`backend/app/schemas/weekly_menu.py`'s docstring ("lunch = rice + a gravy + poriyal", stated with
-"e.g.", not as a complete or authoritative definition), and it says nothing about how `sweet` (an
-`item_type` with no obvious slot of its own) fits in, or what `morning`/`night` require. The
-technical spec document this would come from (`version1_mealPlanner_technical.md`) has been
-unavailable in this repo for every prior phase that needed it (MP-015's meat-type vocabulary,
-MP-017's original flag proposal, MP-020 here) — same underlying gap, not a new one. Inventing a
-combo template from scratch to make this check "complete" would replace a known, stated limitation
-with an unstated, wrong one; that's a worse outcome than the honest gap. **This is Pratheep's call
-per the brief's own instruction to flag real gaps rather than work around them**: either supply the
-real slot/combo templates (or the spec they come from) so this can be built for real, or confirm
-this stays provisional at the `item_type × veg/nonveg × flag-combination` grain until MP-034
-defines them itself.
+**Slot dimension added (PR #12 review round 2)**, using the real spec documents
+(`version1_mealPlanner_functionalities.md` §1/§2, `version1_mealPlanner_technical.md` §4/§5)
+Pratheep supplied for this purpose. `SLOT_ITEM_TYPES` in `validate_coverage.py` maps each of the 6
+slots to the `item_type`(s) its combo template requires, sourced with explicit confidence labels
+per entry, not treated as uniformly authoritative:
 
-**Result: gate FAILS. 4 zero-candidate gaps, reported rather than rounded away:**
+- **Verbatim** — `afternoon` = `rice + gravy + poriyal`, the technical spec's one worked "slot/
+  combo template" example (§5: "lunch = 1 rice + 1–2 gravy + 1 poriyal"). Coverage only checks
+  existence, never the "1–2 gravy" upper bound.
+- **Structurally verbatim** — `snack_1`/`snack_2`/`snack_3` = `snack` each, from the functional
+  spec's "6 slots: morning, afternoon, night, + 3 snacks" (§1) and the schema's own naming.
+- **Inferred, not a worked example** — `morning` = `tiffin` (no morning-slot alternative is ever
+  named in either spec; by elimination and standard convention, not a literal quote) and
+  `night` = `rice` or `tiffin` depending on `user_profiles.dinner_style` (an onboarding choice,
+  technical spec §4's column comment), checked as two separate labeled cases since either is a
+  real possible user.
+- **Deliberately excluded** — `kootu`, `curd`, `sweet` are not assigned to any slot by either spec,
+  including in the one worked combo example above (which names rice/gravy/poriyal specifically and
+  nothing else). Treated as edit-time-optional additions (functional spec §6's "+ to add a missing
+  item_type"), not baseline generation requirements.
 
-| Combination | Candidates |
-|---|---|
-| `tiffin` / nonveg, excluding **Egg + Gluten together** | 0 |
-| `kootu` / nonveg (unfiltered) | 0 |
-| `curd` / nonveg (unfiltered) | 0 |
-| `sweet` / nonveg (unfiltered) | 0 |
+Every gap is now classified **BLOCKING** (a real slot's template needs this item_type — would
+break MP-034's core weekly generation) or **not required by any known slot template**
+(edit-time-only impact — the "+ add a missing item_type" flow would have nothing to offer, but
+generation itself doesn't need it). The gate's exit code now reflects this: it fails only on a
+BLOCKING gap.
+
+**Result: gate FAILS. 1 BLOCKING gap, plus 3 non-blocking gaps still reported in full:**
+
+| Combination | Candidates | Severity |
+|---|---|---|
+| `tiffin` / nonveg, excluding **Egg + Gluten together** | 0 | **BLOCKING** — morning, night (tiffin-style) |
+| `kootu` / nonveg (unfiltered) | 0 | not template-required |
+| `curd` / nonveg (unfiltered) | 0 | not template-required |
+| `sweet` / nonveg (unfiltered) | 0 | not template-required |
 
 Plus one low-margin warning (non-zero, not a gate failure, but thin): `curd` / veg has only 1
 candidate (Curd Rice) unfiltered.
 
-**The first gap is new** — invisible to the original single-flag-only check, since `tiffin` /
-nonveg passes both "excluding Egg alone" and "excluding Gluten alone" individually. A real user
-with both an egg allergy and a gluten intolerance selecting `Egg` and `Gluten` together in
-`dietary_restrictions` would have zero non-veg tiffin candidates. This needs the same kind of
-decision as the other three: source more non-veg tiffin dishes free of both allergens from the
-wider 690-row pool, or accept the gap for now.
+**The one real blocker**: a user with both an egg allergy and a gluten intolerance selecting `Egg`
+and `Gluten` together in `dietary_restrictions` would have zero non-veg tiffin candidates for
+their morning slot (or their night slot, if they chose `dinner_style = 'tiffin'`) — invisible to
+the original single-flag-only check, since `tiffin`/nonveg passes both "excluding Egg alone" and
+"excluding Gluten alone" individually. Needs a decision: source more non-veg tiffin dishes free of
+both allergens from the wider 690-row pool, or accept the gap for now.
 
-**The other 3 gaps most likely reflect real Tamil Nadu culinary convention, not a sourcing
-shortfall** — kootu, curd (rice), and sweets are vegetarian dish categories in this cuisine; a
-genuinely non-veg version of any of them would be unusual, and the 690-row source catalogue doesn't
-have one for any of the three. Two ways to close this, both Pratheep's call per the brief:
-
-1. **Confirm these combinations should simply never be requested** — if MP-034's combo templates
-   never ask for "non-veg kootu"/"non-veg curd"/"non-veg sweet" in the first place (plausible, given
-   the cuisine), this isn't a real gap and the check can be scoped to drop nonsensical combinations
-   rather than flag them.
-2. **If a non-veg variant is genuinely wanted for one of these**, it needs sourcing beyond this
-   690-row catalogue — nothing in the existing pool can fill it.
-
-Not resolved either way in this phase — reported, per the brief's explicit instruction not to
-silently work around a real finding.
+**The other 3 are real but not generation-blocking** — kootu, curd, and sweet aren't part of any
+known slot's combo template, so a zero-candidate result for their non-veg variants can't stop
+MP-034 from producing a valid week; it only means a user couldn't use the edit-time "+" flow to
+swap in a non-veg kootu/curd/sweet, which doesn't exist in the catalog anyway. This also lines up
+with likely real Tamil Nadu culinary convention (these are inherently vegetarian categories in this
+cuisine) — still Pratheep's call whether to source a non-veg variant of any of them, but no longer
+a blocker either way.
 
 ## Definition of done — status
 
@@ -330,10 +340,12 @@ silently work around a real finding.
   closing the case-sensitivity gap the review round found.
 - MP-018's ingestion is idempotency-tested against a real database, not just asserted, and now
   also correctly backfills `track_variety` for pre-existing rows rather than only new ones — done.
-- MP-020's coverage report now checks simultaneous multi-flag exclusions, not just one at a time,
-  and found 4 real gaps (one only visible because of that fix) — reported above, not silently
-  accepted, decision pending. **The gate is still provisional**: it validates
-  `item_type × veg/nonveg × flag-combination`, not the brief's full
-  `slot × item_type × veg/nonveg × restriction` — the missing slot/combo-template dimension needs
-  either the real templates (no spec for them exists in this repo) or an explicit decision that
-  MP-020 doesn't unblock MP-034/MP-038 yet. Not resolved in this phase — see MP-020's section above.
+- MP-020's coverage report now checks simultaneous multi-flag exclusions (not just one at a time)
+  **and** the real slot/combo-template dimension (`morning`/`afternoon`/`night`/`snack_1/2/3`),
+  sourced from the actual spec documents. 1 real BLOCKING gap found (nonveg tiffin excluding
+  Egg+Gluten together — breaks the morning slot and tiffin-style night for an affected user); 3
+  further gaps found but classified non-blocking (kootu/curd/sweet aren't required by any known
+  slot template, so they can't stop MP-034's generation, only limit an edit-time substitution) —
+  see MP-020's section above for the full sourcing of each slot mapping and which parts are
+  verbatim vs. reasonably inferred. The one BLOCKING gap is still Pratheep's decision to resolve
+  (source more dishes or accept it), same as before.

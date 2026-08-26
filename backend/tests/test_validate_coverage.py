@@ -83,11 +83,22 @@ class TestMinimalFailingFlagSets:
 
 class TestValidate:
     def test_a_combination_with_zero_dishes_at_all_is_a_gap(self, conn, clean_dishes) -> None:
-        # Nothing inserted at all — every combination should be a gap.
-        gaps, _ = validate_coverage.validate(conn)
+        # Nothing inserted at all — every combination should be a gap. "tiffin" is required by the
+        # morning and night(tiffin-style) slots, so it lands in the blocking list.
+        blocking, _, _ = validate_coverage.validate(conn)
 
-        assert len(gaps) > 0
-        assert any("tiffin / veg" in g for g in gaps)
+        assert len(blocking) > 0
+        assert any("tiffin / veg" in g for g in blocking)
+
+    def test_an_item_type_with_no_known_slot_is_a_non_blocking_gap(
+        self, conn, clean_dishes
+    ) -> None:
+        # "sweet" isn't required by any slot in SLOT_ITEM_TYPES — a zero-candidate gap for it is
+        # real but shouldn't block MP-034's core generation, only an edit-time "+" substitution.
+        _blocking, non_blocking, _ = validate_coverage.validate(conn)
+
+        assert any(g.startswith("sweet / veg") for g in non_blocking)
+        assert not any(g.startswith("sweet / veg") for g in _blocking)
 
     def test_a_fully_covered_combination_produces_no_gap_for_it(self, conn, clean_dishes) -> None:
         # Cover just "sweet / veg" with a dish carrying no dietary flags, so every exclusion
@@ -95,44 +106,56 @@ class TestValidate:
         _insert(conn, item_type="sweet", veg_or_nonveg="veg", flags=[])
         conn.commit()
 
-        gaps, _ = validate_coverage.validate(conn)
+        blocking, non_blocking, _ = validate_coverage.validate(conn)
 
-        assert not any(g.startswith("sweet / veg") for g in gaps)
+        assert not any(g.startswith("sweet / veg") for g in blocking + non_blocking)
 
     def test_a_dish_that_always_carries_one_flag_creates_a_gap_only_for_that_flags_exclusion(
         self, conn, clean_dishes
     ) -> None:
         # The only "gravy / nonveg" dish always contains Seafood — excluding Seafood empties that
-        # combination, but the unfiltered count passes.
+        # combination, but the unfiltered count passes. "gravy" is required by the afternoon slot,
+        # so this is a blocking gap.
         _insert(conn, item_type="gravy", veg_or_nonveg="nonveg", flags=["Seafood"])
         conn.commit()
 
-        gaps, _ = validate_coverage.validate(conn)
+        blocking, _, _ = validate_coverage.validate(conn)
 
-        assert any(g == "gravy / nonveg, excluding [Seafood]: 0 candidates" for g in gaps)
-        assert not any(g.startswith("gravy / nonveg: 0 candidates unfiltered") for g in gaps)
+        assert any(
+            g.startswith("gravy / nonveg, excluding [Seafood]: 0 candidates") for g in blocking
+        )
+        assert not any(g.startswith("gravy / nonveg: 0 candidates unfiltered") for g in blocking)
 
     def test_a_simultaneous_two_flag_exclusion_is_caught_even_when_each_flag_alone_is_fine(
         self, conn, clean_dishes
     ) -> None:
         # One dish is Gluten-only, the other is Nuts-only — excluding either flag alone still
         # leaves the other dish standing, but excluding both together empties the group. This is
-        # the PR #12 review's concrete example.
+        # the PR #12 review's concrete example. "tiffin" is a blocking item_type.
         _insert(conn, item_type="tiffin", veg_or_nonveg="veg", flags=["Gluten"])
         _insert(conn, item_type="tiffin", veg_or_nonveg="veg", flags=["Nuts"])
         conn.commit()
 
-        gaps, _ = validate_coverage.validate(conn)
+        blocking, _, _ = validate_coverage.validate(conn)
 
-        assert not any(g == "tiffin / veg, excluding [Gluten]: 0 candidates" for g in gaps)
-        assert not any(g == "tiffin / veg, excluding [Nuts]: 0 candidates" for g in gaps)
-        assert any(g == "tiffin / veg, excluding [Gluten + Nuts]: 0 candidates" for g in gaps)
+        assert not any(g.startswith("tiffin / veg, excluding [Gluten]:") for g in blocking)
+        assert not any(g.startswith("tiffin / veg, excluding [Nuts]:") for g in blocking)
+        assert any(
+            g.startswith("tiffin / veg, excluding [Gluten + Nuts]: 0 candidates") for g in blocking
+        )
+
+    def test_a_blocking_gap_names_the_slots_it_affects(self, conn, clean_dishes) -> None:
+        blocking, _, _ = validate_coverage.validate(conn)
+
+        rice_gap = next(g for g in blocking if g.startswith("rice / veg: 0 candidates"))
+        assert "afternoon" in rice_gap
+        assert "night (dinner_style=rice)" in rice_gap
 
     def test_low_margin_warns_but_does_not_gate(self, conn, clean_dishes) -> None:
         _insert(conn, item_type="kootu", veg_or_nonveg="veg", flags=[])
         conn.commit()
 
-        gaps, warnings = validate_coverage.validate(conn)
+        blocking, non_blocking, warnings = validate_coverage.validate(conn)
 
-        assert not any(g.startswith("kootu / veg") for g in gaps)
+        assert not any(g.startswith("kootu / veg") for g in blocking + non_blocking)
         assert any("kootu / veg" in w for w in warnings)
