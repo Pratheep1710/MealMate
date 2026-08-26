@@ -34,35 +34,29 @@ step, and exactly what to do about the manual part.
   the original check-then-send was non-atomic, so two overlapping runs could both send the same
   reminder; this closes that the same way `generation_claim.py` closes it for weekly generation).
   Scheduled by `.github/workflows/daily-reminder.yml` at 20:00 IST (14:30 UTC, fixed — India has no
-  DST) — **currently gated: the `schedule:` trigger is commented out until the secrets below are
-  provisioned and step 5 below has been run once successfully.**
+  DST) — **live as of PR #11**: the `schedule:` trigger is enabled.
 
-## Gap: MP-068 needs an EAS project id and a physical device — the open Phase 4 blocker
+## MP-068 end-to-end device verification — done (PR #11)
 
-`Notifications.getExpoPushTokenAsync()` requires `projectId` once running outside Expo Go (SDK 57).
-This repo has no `eas.json`/linked EAS project yet, so `getProjectId()` in
-`pushRegistration.ts` currently returns `undefined` and registration no-ops rather than crashing —
-confirmed still true as of PR #10 (`app.config.ts` has no `extra.eas.projectId`).
+`Notifications.getExpoPushTokenAsync()` requires `projectId` once running outside Expo Go (SDK 57),
+plus real Android push needs Firebase Cloud Messaging (FCM) V1 credentials — neither existed as of
+PR #10. Both are now set up:
 
-This is the one thing an agent working from this repo cannot do — it needs an Expo/EAS account and
-a physical device, neither of which exist in this environment. **Checklist for whoever has both:**
-
-1. Link the EAS project: `npx eas init` from `mobile/` (creates the project, writes the id into
-   `app.config.ts`'s `extra.eas.projectId` — or set it manually if a project id already exists).
-2. Build a dev client or EAS build and install it on a real device — push tokens are unavailable in
-   Expo Go on Android from SDK 53 onward and unreliable there generally; a simulator never works
-   regardless (`Device.isDevice` gates registration for exactly this reason).
-3. Sign in on that device/build and confirm a row appears in `push_tokens` (RLS-scoped to that
-   user — check as that user, or via the Supabase dashboard's service-role view).
-4. Close the app fully, trigger a send (`python backend/scripts/run_daily_reminder.py`, or wait for
-   the schedule once re-enabled — see below), and confirm the device actually receives the
-   notification with the app closed, not just foregrounded.
-5. Provision the repo secrets below, run the `daily-reminder` workflow via `workflow_dispatch` in
-   the Actions tab, confirm it completes with `sent >= 1` and the device gets the push, *then*
-   uncomment the `schedule:` block in `.github/workflows/daily-reminder.yml`.
-
-Steps 1–2 also implicitly verify `unregister_push_token` (sign out on that device, confirm the
-`push_tokens` row is gone) — worth checking at the same time since it's the same device/session.
+- EAS project linked (`app.config.ts`'s `extra.eas.projectId`, `owner`, `slug`); Android
+  `package: com.pratheeplabss.mealplanner`.
+- A Firebase project ("MealPlanner") registered under that same package name.
+  `google-services.json` is *not* committed (gitleaks flags its embedded API key, and Google's own
+  guidance not to rely on secrecy for it doesn't change that this repo's security gate should still
+  hold) — it's stored as an EAS file-type environment variable (`GOOGLE_SERVICES_JSON`), which
+  `app.config.ts`'s `android.googleServicesFile` reads via `process.env.GOOGLE_SERVICES_JSON` at
+  build time, falling back to a local gitignored copy for `expo start`.
+- The FCM V1 service account key is uploaded via `eas credentials -p android` → **Google Service
+  Account → Push Notifications (FCM V1)** (not the *Legacy* slot — easy to pick by mistake, and the
+  wrong one silently accepts the same file without ever powering a real send).
+- Verified on a real Android device: signed in, permission granted, a real `ExponentPushToken[...]`
+  row appeared in `push_tokens`, and — app fully force-closed — a push sent via
+  `send_expo_push` was received as a real system notification.
+- `unregister_push_token` was exercised the same session (sign-out removes the device's row).
 
 ## New repo secrets MP-070's workflow needs
 
@@ -74,14 +68,20 @@ SUPABASE_URL
 SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 SUPABASE_DB_HOST
-SUPABASE_DB_PORT        (optional, defaults to 5432)
-SUPABASE_DB_USER        (optional, defaults to "postgres")
+SUPABASE_DB_USER        (optional, defaults to "postgres" — this project's pooler host needs
+                         "postgres.<project-ref>", so it's set explicitly rather than relying on
+                         the default)
 SUPABASE_DB_PASSWORD
 OPENAI_API_KEY
 OPENAI_MODEL
 EXPO_ACCESS_TOKEN       (only required if the Expo project has Enhanced Push Notification
                          Security turned on — see app/config.py's ExpoConfig)
 ```
+
+**Do not create a `SUPABASE_DB_PORT` secret.** An unset GitHub Actions secret resolves to an empty
+string, not an absent env var — `app/config.py`'s "fall back to the 5432 default" only recognizes
+truly-missing vars, so an *empty* `SUPABASE_DB_PORT` fails int validation instead of defaulting
+(caught by PR #11). The workflow simply omits the line; the default is correct.
 
 `SUPABASE_URL`/`SUPABASE_ANON_KEY` likely already exist from MP-012
 (`docs/MP-006-MP-012-supabase-setup.md`); the `SUPABASE_DB_*`/`SUPABASE_SERVICE_ROLE_KEY`/
@@ -90,16 +90,12 @@ direct DB or OpenAI credentials).
 
 ## Status
 
-Registration, unregistration, the atomic send claim, and the send itself are all written and
-tested: `mobile/src/lib/__tests__/pushRegistration.test.ts`, `mobile/src/contexts/__tests__/
-SessionContext.test.tsx` (unregister-before-signOut ordering), `supabase/tests/rls.test.mjs`
-(register/unregister RLS, including cross-user denial), `backend/tests/test_reminder_copy.py`,
-`backend/tests/test_push_dispatch.py`, `backend/tests/test_reminder_claim.py` (including a real
-two-connection race, mirroring `test_generation_claim.py`).
-
-**Still not verified end-to-end** — that's the checklist above, items 1–5. Until it's done,
-`run_daily_reminder.py` will run and log correctly against an empty `push_tokens` table (zero
-users to notify) but has not been proven to deliver a real push to a real phone, and the schedule
-stays commented out in `daily-reminder.yml` on purpose. PR #10's review (2026-08-25) held sign-off
-on exactly this gap — findings 2–7 from that review are addressed, MP-068's device verification
-(finding 1) is not.
+Fully verified end-to-end as of PR #11: registration, unregistration, the atomic send claim, and
+the send itself are all written and tested (`mobile/src/lib/__tests__/pushRegistration.test.ts`,
+`mobile/src/contexts/__tests__/SessionContext.test.tsx` — unregister-before-signOut ordering,
+`supabase/tests/rls.test.mjs` — register/unregister RLS including cross-user denial,
+`backend/tests/test_reminder_copy.py`, `backend/tests/test_push_dispatch.py`,
+`backend/tests/test_reminder_claim.py` — including a real two-connection race, mirroring
+`test_generation_claim.py`), *and* proven live: a real device registered a token, received a real
+push with the app closed, and a `workflow_dispatch` run of `daily-reminder.yml` against the fixed
+branch completed successfully (`sent`/`skipped` as expected, no errors). The schedule is enabled.
