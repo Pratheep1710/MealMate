@@ -27,17 +27,37 @@ def test_models_package_exports_one_class_per_table():
 
 def test_repositories_modules_import_and_expose_functions():
     for module_name, expected_functions in {
-        "app.repositories.profiles": ["get_profile", "upsert_profile", "list_favorite_dish_ids"],
-        "app.repositories.catalog": ["get_candidates", "resolve_ingredient_alias"],
-        "app.repositories.history": ["get_recent_variety_dish_ids"],
+        "app.repositories.profiles": [
+            "get_profile",
+            "list_profiles",
+            "upsert_profile",
+            "list_favorite_dish_ids",
+        ],
+        "app.repositories.catalog": [
+            "get_candidates",
+            "get_reserves_eligible_dish_ids",
+            "resolve_ingredient_alias",
+        ],
+        "app.repositories.history": [
+            "get_recent_variety_dish_ids",
+            "get_dish_last_used_dates",
+            "get_nonveg_plan_dates",
+        ],
         "app.repositories.availability": [
             "get_available_ingredient_ids",
             "set_available_ingredients",
         ],
-        "app.repositories.plans": ["get_week_plan", "write_grocery_snapshot"],
+        "app.repositories.plans": [
+            "get_week_plan",
+            "clear_plan_items_for_dates",
+            "get_grocery_ingredient_rows",
+            "write_grocery_snapshot",
+        ],
         "app.repositories.jobs": [
             "claim_or_create_job",
             "try_start_processing",
+            "try_restart_processing",
+            "try_retry_failed",
             "update_job_status",
         ],
         "app.repositories.notifications": ["upsert_pending", "mark_status"],
@@ -66,6 +86,20 @@ def test_phase3_services_import():
             assert callable(getattr(module, fn, None)), (
                 f"{module_name}.{fn} missing or not callable"
             )
+
+
+def test_phase6_generation_context_imports():
+    for module_name, expected_function in {
+        "app.services.generation_context": "build_generation_context",
+        "app.services.generation_prompt": "build_generation_prompt",
+        "app.services.generation_eligibility": "is_eligible",
+        "app.services.menu_validation": "validate_menu",
+        "app.services.rule_based_fallback": "build_fallback_plan",
+        "app.services.plan_persistence": "persist_generated_plan",
+        "app.services.generation_engine": "run_generation_engine",
+    }.items():
+        module = importlib.import_module(module_name)
+        assert callable(getattr(module, expected_function))
 
 
 def test_weekly_menu_schema_imports():

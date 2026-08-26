@@ -22,6 +22,12 @@ def get_profile(conn: psycopg.Connection[DictRow], user_id: uuid.UUID) -> UserPr
     return UserProfile.model_validate(row) if row else None
 
 
+def list_profiles(conn: psycopg.Connection[DictRow]) -> list[UserProfile]:
+    """All profiles considered by the family-scale daily generation sweep."""
+    rows = conn.execute(f"select {_COLUMNS} from user_profiles order by id").fetchall()
+    return [UserProfile.model_validate(row) for row in rows]
+
+
 def upsert_profile(conn: psycopg.Connection[DictRow], profile: UserProfile) -> UserProfile:
     """`planning_mode` is deliberately insert-only: it's set from `profile.planning_mode` on the
     first (onboarding) insert, but the `on conflict` branch omits it from the update list, so a

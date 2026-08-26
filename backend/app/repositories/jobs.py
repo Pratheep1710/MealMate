@@ -56,6 +56,36 @@ def try_start_processing(
     return GenerationJob.model_validate(row) if row else None
 
 
+def try_restart_processing(
+    conn: psycopg.Connection[DictRow], job_id: uuid.UUID
+) -> GenerationJob | None:
+    """Atomically reopens a completed/failed week for an explicit remaining-week regenerate."""
+    row = conn.execute(
+        f"""
+        update generation_jobs
+        set status = 'processing', last_error = null
+        where id = %s and status in ('done', 'failed')
+        returning {_COLUMNS}
+        """,
+        (job_id,),
+    ).fetchone()
+    return GenerationJob.model_validate(row) if row else None
+
+
+def try_retry_failed(conn: psycopg.Connection[DictRow], job_id: uuid.UUID) -> GenerationJob | None:
+    """Atomically reclaims a failed scheduled job without reopening completed work."""
+    row = conn.execute(
+        f"""
+        update generation_jobs
+        set status = 'processing', last_error = null
+        where id = %s and status = 'failed'
+        returning {_COLUMNS}
+        """,
+        (job_id,),
+    ).fetchone()
+    return GenerationJob.model_validate(row) if row else None
+
+
 def get_job(conn: psycopg.Connection[DictRow], job_id: uuid.UUID) -> GenerationJob | None:
     row = conn.execute(
         f"select {_COLUMNS} from generation_jobs where id = %s", (job_id,)

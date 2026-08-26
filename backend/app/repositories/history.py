@@ -42,3 +42,51 @@ def get_recent_variety_dish_ids(
         (user_id, since, before),
     ).fetchall()
     return [row["dish_id"] for row in rows]
+
+
+def get_dish_last_used_dates(
+    conn: psycopg.Connection[DictRow],
+    user_id: uuid.UUID,
+    before: datetime.date,
+) -> dict[uuid.UUID, datetime.date]:
+    """Last non-skipped use before ``before`` for deterministic fallback ranking."""
+    rows = conn.execute(
+        """
+        select pi.dish_id, max(mp.plan_date) as last_used
+        from plan_items pi
+        join meal_plans mp on mp.id = pi.plan_id
+        where mp.user_id = %s
+          and mp.plan_date < %s
+          and mp.is_skipped = false
+          and pi.status = 'filled'
+          and pi.dish_id is not null
+        group by pi.dish_id
+        """,
+        (user_id, before),
+    ).fetchall()
+    return {row["dish_id"]: row["last_used"] for row in rows}
+
+
+def get_nonveg_plan_dates(
+    conn: psycopg.Connection[DictRow],
+    user_id: uuid.UUID,
+    since: datetime.date,
+    before: datetime.date,
+) -> set[datetime.date]:
+    """Dates in ``[since, before)`` whose live plan contains at least one non-veg dish."""
+    rows = conn.execute(
+        """
+        select distinct mp.plan_date
+        from meal_plans mp
+        join plan_items pi on pi.plan_id = mp.id
+        join dishes d on d.id = pi.dish_id
+        where mp.user_id = %s
+          and mp.plan_date >= %s
+          and mp.plan_date < %s
+          and mp.is_skipped = false
+          and pi.status = 'filled'
+          and d.veg_or_nonveg = 'nonveg'
+        """,
+        (user_id, since, before),
+    ).fetchall()
+    return {row["plan_date"] for row in rows}

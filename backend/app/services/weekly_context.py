@@ -9,8 +9,8 @@ favorites_schema.sql's own example uses the abbreviated form, and that's what's 
 persisted), those named days are 'required' non-veg and every other day is 'veg_only' — the
 pattern is precise, so days outside it are pinned veg by the same logic that pinned the named days
 non-veg. When no pattern is set, nonveg_days_per_week is a count-only constraint (some N days
-somewhere in the week) with no per-day answer yet, so every day is 'flexible' — which day satisfies
-the count is a generation-time decision (MP-034/038-044), not this service's job.
+somewhere in the week), so every day stays 'flexible' here; Phase 6's generation context resolves
+the remaining quota into deterministic evenly-spaced target dates.
 """
 
 from __future__ import annotations

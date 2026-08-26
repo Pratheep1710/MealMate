@@ -1,6 +1,5 @@
-"""MP-031: candidate catalog queries (dishes/ingredients) — read-only; catalog tables are
-populated only by the MP-018 ingestion job (blocked pending the dish workbook as of Phase 2,
-see docs/MP-015-catalog-blocked.md), never written here.
+"""MP-031/034 candidate catalog queries — read-only at runtime; catalog tables are populated by
+the MP-018 ingestion pipeline, never written here.
 """
 
 from __future__ import annotations
@@ -58,6 +57,39 @@ def get_ingredients_for_dish(
         (dish_id,),
     ).fetchall()
     return [Ingredient.model_validate(row) for row in rows]
+
+
+def get_reserves_eligible_dish_ids(
+    conn: psycopg.Connection[DictRow],
+    candidate_dish_ids: list[uuid.UUID],
+    available_ingredient_ids: list[uuid.UUID],
+) -> list[uuid.UUID]:
+    """Candidates whose every non-staple ingredient is in the user's Reserves checklist.
+
+    Staples are assumed available and do not participate in matching. A dish with no linked
+    non-staple ingredients remains eligible; MP-016's eventual per-dish ingredient mapping will
+    make this filter progressively more informative without changing its runtime contract.
+    """
+    if not candidate_dish_ids:
+        return []
+    rows = conn.execute(
+        """
+        select d.id
+        from dishes d
+        where d.id = any(%s)
+          and not exists (
+            select 1
+            from dish_ingredients di
+            join ingredients i on i.id = di.ingredient_id
+            where di.dish_id = d.id
+              and i.is_staple = false
+              and not (di.ingredient_id = any(%s))
+          )
+        order by d.id
+        """,
+        (candidate_dish_ids, available_ingredient_ids),
+    ).fetchall()
+    return [row["id"] for row in rows]
 
 
 def resolve_ingredient_alias(
