@@ -257,18 +257,34 @@ only; it never deletes or modifies a row. Two checks, run against the real workb
 
 **No dishes were removed this phase.** Both lists above are inputs to a decision, not a decision.
 
-## MP-020 — Validate slot/combo coverage (the hard gate)
+## MP-020 — Validate slot/combo coverage (the hard gate) — **provisional, does not yet unblock MP-034/MP-038**
 
 `supabase/seed/validate_coverage.py`, run live against the catalog after MP-015/017/018 above.
 Checks every `(item_type, veg_or_nonveg)` combination the schema defines, unfiltered and under
 **every combination of simultaneous `dietary_flags` exclusions** a user could select (PR #12
-review fix — the original version only checked one flag excluded at a time; see the review-round
-section above for why that misses real gaps). 16 groups, each checked against every non-empty
-subset of the 6-flag vocabulary (up to 63 subsets, computed in memory from one fetch per group —
-not one query per subset), reporting only the *minimal* failing combinations. **MP-034's actual
-combo templates don't exist yet** (that's exactly what this gate is supposed to unblock), so this
-validates at the finest grain checkable right now; re-run once those templates land to check the
-real per-slot requirements, not just this item_type × diet × flag-combination cross product.
+review round 1 fix — the original version only checked one flag excluded at a time; see the
+review-round section above for why that misses real gaps). 16 groups, each checked against every
+non-empty subset of the 6-flag vocabulary (up to 63 subsets, computed in memory from one fetch per
+group — not one query per subset), reporting only the *minimal* failing combinations.
+
+**Missing dimension, flagged explicitly per PR #12 review round 2 — not resolved in this
+phase.** The Phase 5 brief's own AC is coverage over `slot × item_type × veg/nonveg ×
+restriction`, not just `item_type × veg/nonveg × restriction`. This validates the latter only.
+Closing that gap needs the actual slot/combo templates — which `item_type`(s) compose each of the
+6 slots (`morning`, `afternoon`, `night`, `snack_1/2/3`) — and **no such spec exists anywhere in
+this repo to build it from**: the one committed detail is a single illustrative example in
+`backend/app/schemas/weekly_menu.py`'s docstring ("lunch = rice + a gravy + poriyal", stated with
+"e.g.", not as a complete or authoritative definition), and it says nothing about how `sweet` (an
+`item_type` with no obvious slot of its own) fits in, or what `morning`/`night` require. The
+technical spec document this would come from (`version1_mealPlanner_technical.md`) has been
+unavailable in this repo for every prior phase that needed it (MP-015's meat-type vocabulary,
+MP-017's original flag proposal, MP-020 here) — same underlying gap, not a new one. Inventing a
+combo template from scratch to make this check "complete" would replace a known, stated limitation
+with an unstated, wrong one; that's a worse outcome than the honest gap. **This is Pratheep's call
+per the brief's own instruction to flag real gaps rather than work around them**: either supply the
+real slot/combo templates (or the spec they come from) so this can be built for real, or confirm
+this stays provisional at the `item_type × veg/nonveg × flag-combination` grain until MP-034
+defines them itself.
 
 **Result: gate FAILS. 4 zero-candidate gaps, reported rather than rounded away:**
 
@@ -316,4 +332,8 @@ silently work around a real finding.
   also correctly backfills `track_variety` for pre-existing rows rather than only new ones — done.
 - MP-020's coverage report now checks simultaneous multi-flag exclusions, not just one at a time,
   and found 4 real gaps (one only visible because of that fix) — reported above, not silently
-  accepted, decision pending.
+  accepted, decision pending. **The gate is still provisional**: it validates
+  `item_type × veg/nonveg × flag-combination`, not the brief's full
+  `slot × item_type × veg/nonveg × restriction` — the missing slot/combo-template dimension needs
+  either the real templates (no spec for them exists in this repo) or an explicit decision that
+  MP-020 doesn't unblock MP-034/MP-038 yet. Not resolved in this phase — see MP-020's section above.

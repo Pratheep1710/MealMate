@@ -1,21 +1,24 @@
-"""MP-020: catalog coverage validation — the hard gate before MP-034/MP-038 (generation engine)
-can safely start.
+"""MP-020: catalog coverage validation.
+
+**Provisional — does not yet fully unblock MP-034/MP-038** (PR #12 review round 2 finding). The
+Phase 5 brief's AC is coverage over slot × item_type × veg/nonveg × restriction; this only checks
+item_type × veg/nonveg × restriction. Closing that gap needs the actual slot/combo templates
+(which item_type(s) compose each of the 6 slots — morning/afternoon/night/snack_1/2/3), and no such
+spec exists anywhere in this repo to build it from (the one committed detail is a single
+illustrative "e.g." example in backend/app/schemas/weekly_menu.py's docstring, not a complete
+definition for all 6 slots). Inventing one here would replace a known, stated limitation with an
+unstated, wrong one. See docs/MP-015-020-catalog-pipeline.md's MP-020 section for the full
+explanation — this is flagged back for either the real templates or an explicit scope decision,
+not resolved in this phase.
 
 Checks, against the live `dishes` table, that every (item_type, veg_or_nonveg) combination the
 schema itself defines has a non-zero candidate count, unfiltered and under every combination of
 simultaneous dietary_flags hard exclusions a user could plausibly select (mirroring
 backend/app/repositories/catalog.py's get_candidates array-overlap exclusion, which takes a whole
 list of flags at once — a real user with two allergies excludes on both simultaneously, not one at
-a time). PR #12 review finding: an earlier version only checked one flag excluded at a time, which
-can pass every single-flag check while still having zero candidates for someone excluding, say,
-both Gluten and Nuts together.
-
-MP-034's actual combo templates (which slots need which item_types together) don't exist yet — this
-validates at the level MP-003's coverage gate itself describes ("every (slot, item_type)
-combination... for both veg and non-veg... under at least the common dietary_flags exclusions"),
-which is everything checkable before that later dependency lands. Re-run this once MP-034's
-templates exist to validate the actual per-slot combinations, not just the per-item_type/diet cross
-product this covers now.
+a time). PR #12 review round 1 finding: an earlier version only checked one flag excluded at a
+time, which can pass every single-flag check while still having zero candidates for someone
+excluding, say, both Gluten and Nuts together.
 
 Usage:
   python supabase/seed/validate_coverage.py
