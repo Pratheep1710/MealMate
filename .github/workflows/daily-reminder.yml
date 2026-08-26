@@ -5,12 +5,12 @@ name: Daily reminder
 #
 # PR #10 review finding: the scheduled trigger was enabled before the repo secrets it needs
 # existed, so every nightly run would just fail with a ConfigError — noisy and pointless, not
-# actually gated on anything. Commented out until docs/MP-068-070-push-notifications.md's secrets
-# (SUPABASE_*, EXPO_ACCESS_TOKEN) are provisioned and a manual workflow_dispatch run has been
-# verified to succeed end-to-end; re-enable by uncommenting the `schedule:` block below.
+# actually gated on anything. Re-enabled here (PR #11) after the required secrets were
+# provisioned and a workflow_dispatch run on this exact branch (32941228662) completed
+# successfully end-to-end, including a real push delivered to a physical device.
 on:
-  # schedule:
-  #   - cron: "30 14 * * *"
+  schedule:
+    - cron: "30 14 * * *"
   workflow_dispatch:
 
 permissions:
