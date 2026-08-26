@@ -1,5 +1,10 @@
 # MP-015–020 (Catalog track) — Blocked Pending the Dish Workbook
 
+**Superseded — see `docs/MP-015-020-catalog-pipeline.md`.** The workbook this doc describes as
+missing was found on disk in Phase 5 (it was never committed to the repo, by design — see that
+doc), and MP-015 through MP-020 are now done. Left below as-is for the historical record of what
+was checked and why at the time.
+
 **Status: not started this phase.** Per the Phase 2 brief §0: "MP-015 is blocked pending the dish
 catalog workbook... Confirm it's finished and in hand before starting MP-015. If it isn't, work
 Tracks 2 and 3 first."

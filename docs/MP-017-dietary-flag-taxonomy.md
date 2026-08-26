@@ -1,5 +1,11 @@
 # MP-017 — Dietary/Allergen Flag Taxonomy: Proposal (Needs Your Confirmation)
 
+**Superseded — see `docs/MP-015-020-catalog-pipeline.md`'s MP-017 section.** The Phase 5 brief
+decided the vocabulary directly (`Nuts`, `Milk-Dairy`, `Gluten`, `Egg`, `Seafood`, `Sesame` —
+narrower than the draft below: no vegan/jain/peanut/soy as separate flags, peanut folded into
+`Nuts`, `Seafood` added), and it's now implemented and live. Left below as-is for the historical
+record of the original proposal and its reasoning.
+
 **Status: proposed, not implemented.** Per the Phase 2 brief §0, this is safety-critical — the
 list below becomes the hard-exclusion set MP-043 uses to reject dishes outright, so it's presented
 for confirmation rather than assumed. It is also blocked on the same dish workbook as the rest of
