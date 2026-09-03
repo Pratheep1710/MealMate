@@ -9,6 +9,9 @@ from __future__ import annotations
 import datetime
 import uuid
 
+import psycopg
+import pytest
+
 from app.models import UserProfile
 from app.repositories import availability as availability_repo
 from app.repositories import catalog as catalog_repo
@@ -84,6 +87,50 @@ class TestProfilesRepository:
 
         profiles_repo.remove_favorite(conn, user_a, dish_id)
         assert profiles_repo.list_favorite_dish_ids(conn, user_a) == []
+
+    def test_add_favorite_rejects_the_ninth_dish_before_hitting_the_db(self, conn, make_user):
+        user_id = make_user()
+        dish_ids = [_insert_dish(conn, name=f"Fav {i}") for i in range(profiles_repo.FAVORITES_CAP)]
+        for dish_id in dish_ids:
+            profiles_repo.add_favorite(conn, user_id, dish_id)
+        one_too_many = _insert_dish(conn, name="One Too Many")
+
+        with pytest.raises(profiles_repo.FavoritesCapExceeded):
+            profiles_repo.add_favorite(conn, user_id, one_too_many)
+
+        favorites = profiles_repo.list_favorite_dish_ids(conn, user_id)
+        assert len(favorites) == profiles_repo.FAVORITES_CAP
+
+    def test_re_adding_an_existing_favorite_at_the_cap_is_still_a_no_op(self, conn, make_user):
+        user_id = make_user()
+        dish_ids = [_insert_dish(conn, name=f"Fav {i}") for i in range(profiles_repo.FAVORITES_CAP)]
+        for dish_id in dish_ids:
+            profiles_repo.add_favorite(conn, user_id, dish_id)
+
+        profiles_repo.add_favorite(conn, user_id, dish_ids[0])  # already a favorite, at the cap
+
+        favorites = profiles_repo.list_favorite_dish_ids(conn, user_id)
+        assert len(favorites) == profiles_repo.FAVORITES_CAP
+
+    def test_the_db_trigger_itself_rejects_a_direct_insert_past_the_cap(self, conn, make_user):
+        """The Python check in add_favorite is a friendlier error, not the real enforcement — this
+        proves migration 0018's trigger holds even for an insert that bypasses the repository
+        function entirely (mirroring how the mobile client writes directly via RLS).
+        """
+        user_id = make_user()
+        for i in range(profiles_repo.FAVORITES_CAP):
+            dish_id = _insert_dish(conn, name=f"Direct Fav {i}")
+            conn.execute(
+                "insert into user_favorite_dishes (user_id, dish_id) values (%s, %s)",
+                (user_id, dish_id),
+            )
+        one_too_many = _insert_dish(conn, name="Direct One Too Many")
+
+        with pytest.raises(psycopg.errors.CheckViolation, match="favorites cap"):
+            conn.execute(
+                "insert into user_favorite_dishes (user_id, dish_id) values (%s, %s)",
+                (user_id, one_too_many),
+            )
 
     def test_planning_mode_is_insert_only_and_ignores_later_changes(self, conn, make_user):
         """Regression: upsert_profile used to include `planning_mode` in its ON CONFLICT UPDATE
@@ -614,6 +661,44 @@ class TestNotificationsRepository:
 
         assert len(results) == 1
         assert results[0].notification_type == "daily_reminder"
+
+    def test_reconciliation_only_finds_sent_rows_old_enough_with_a_ticket(self, conn, make_user):
+        user_id = make_user()
+        target_date = datetime.date(2026, 8, 24)
+
+        pending = notifications_repo.upsert_pending(conn, user_id, "daily_reminder", target_date)
+        sent_no_ticket = notifications_repo.upsert_pending(conn, user_id, "week_ready", target_date)
+        notifications_repo.mark_status(conn, sent_no_ticket.id, "sent")  # no ticket id — never sent
+        already_delivered = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", target_date + datetime.timedelta(days=1)
+        )
+        notifications_repo.mark_status(
+            conn, already_delivered.id, "delivered", expo_ticket_id="ticket-old"
+        )
+        reconcilable = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", target_date + datetime.timedelta(days=2)
+        )
+        notifications_repo.mark_status(conn, reconcilable.id, "sent", expo_ticket_id="ticket-new")
+
+        results = notifications_repo.list_sent_awaiting_reconciliation(
+            conn, before=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=1)
+        )
+
+        assert {r.id for r in results} == {reconcilable.id}
+        assert pending.id not in {r.id for r in results}
+
+    def test_reconciliation_excludes_rows_sent_too_recently(self, conn, make_user):
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+        notifications_repo.mark_status(conn, notification.id, "sent", expo_ticket_id="ticket-fresh")
+
+        results = notifications_repo.list_sent_awaiting_reconciliation(
+            conn, before=datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=25)
+        )
+
+        assert results == []
 
 
 class TestPushTokensRepository:

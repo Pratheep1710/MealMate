@@ -29,7 +29,7 @@ from app.logging import get_logger
 from app.repositories import notifications as notifications_repo
 from app.repositories import plans as plans_repo
 from app.repositories import push_tokens as push_tokens_repo
-from app.services.push_dispatch import PushSendError, send_expo_push
+from app.services.push_dispatch import PushSendError, send_expo_push_with_one_retry
 from app.services.reminder_claim import claim_reminder
 from app.services.reminder_copy import compose_reminder
 
@@ -80,7 +80,7 @@ def main() -> int:
             last_ticket_id: str | None = None
             for token in tokens:
                 try:
-                    last_ticket_id = send_expo_push(
+                    last_ticket_id = send_expo_push_with_one_retry(
                         token.expo_push_token, title, body, config.expo.access_token
                     )
                 except (PushSendError, httpx.HTTPError) as exc:

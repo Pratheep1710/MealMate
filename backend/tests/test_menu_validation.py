@@ -36,6 +36,25 @@ def test_track_variety_dish_cannot_repeat_within_the_output() -> None:
     assert "in_week_repeat" in _codes(menu, context)
 
 
+def test_a_favorite_still_cannot_repeat_within_the_same_generated_week() -> None:
+    """MP-063: favorites are exempt from the 10-day history rule only (see
+    TestVarietyExclusionService::test_favorites_are_exempt_even_when_served_recently) — the
+    functional spec is explicit that "a favorite still can't appear twice in the *same* week, so
+    the basic variety guarantee holds even with a full favorites list." in_week_repeat must fire
+    for a favorite exactly the same as for any other track_variety dish; this proves the two rules
+    (10-day exemption vs. in-week dedup) aren't accidentally conflated into one exemption.
+    """
+    context = make_context()
+    old = context.catalog[0].dishes[0]
+    favorite = old.model_copy(update={"track_variety": True})
+    context = replace_dish(context, old, favorite)
+    context = replace(context, favorite_dish_ids=frozenset({favorite.id}))
+
+    menu = menu_for_context(context, include_nonveg=False)
+
+    assert "in_week_repeat" in _codes(menu, context)
+
+
 def test_recent_track_variety_dish_is_rejected() -> None:
     context = make_context()
     old = context.catalog[0].dishes[1]

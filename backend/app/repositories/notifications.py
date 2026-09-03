@@ -87,6 +87,27 @@ def mark_status(
     return NotificationLog.model_validate(row)
 
 
+def list_sent_awaiting_reconciliation(
+    conn: psycopg.Connection[DictRow], *, before: datetime.datetime
+) -> list[NotificationLog]:
+    """MP-073: rows a ticket was issued for but whose actual delivery outcome (Expo's receipt) has
+    never been checked. `before` is the reconciliation job's own "now minus a buffer" — Expo's
+    receipts aren't necessarily available the instant a ticket is issued, and `updated_at` is set
+    the moment the row was marked 'sent', so this only picks up rows old enough that a receipt is
+    actually likely to exist yet (the ~30-minute-later follow-up from the technical spec's outbox
+    diagram). A row missing `expo_ticket_id` was never actually sent (the "failed" branch never
+    gets one) and has nothing to reconcile against.
+    """
+    rows = conn.execute(
+        f"""
+        select {_COLUMNS} from notification_log
+        where status = 'sent' and expo_ticket_id is not null and updated_at < %s
+        """,
+        (before,),
+    ).fetchall()
+    return [NotificationLog.model_validate(row) for row in rows]
+
+
 def list_for_target_date(
     conn: psycopg.Connection[DictRow], notification_type: str, target_date: datetime.date
 ) -> list[NotificationLog]:

@@ -41,7 +41,10 @@ npm test       # smoke test
 
 ## Current status
 
-Foundation, mobile shell/live plan views, push notifications, the curated catalog pipeline, and
-the Phase 6 weekly generation engine are implemented. See
-`docs/MP-034-044-generation-engine.md` for the generation lifecycle, verification, and the
-remaining per-dish ingredient-data limitation affecting live grocery/Reserves richness.
+Foundation, mobile shell/live plan views, push notifications, the curated catalog pipeline, the
+Phase 6 weekly generation engine, and Phase 7's item-level swap/add/remove, notification
+reliability (retry + Expo receipt reconciliation), and favorites/make-extra are implemented. See
+`docs/MP-034-044-generation-engine.md` for the generation lifecycle and
+`docs/MP-058-073-swap-notifications-favorites.md` for Phase 7's scope, the Track A verification
+findings, and the remaining per-dish ingredient-data limitation affecting live grocery/Reserves
+richness (unchanged since Phase 6).

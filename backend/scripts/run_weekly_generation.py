@@ -18,7 +18,7 @@ from app.services.generation_context import build_generation_catalog
 from app.services.generation_engine import GenerationOutcome, run_generation_engine
 from app.services.openai_generation import OpenAIWeeklyMenuGenerator
 from app.services.planning_trigger import compute_trigger
-from app.services.push_dispatch import PushSendError, send_expo_push
+from app.services.push_dispatch import PushSendError, send_expo_push_with_one_retry
 
 logger = get_logger(__name__)
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -55,7 +55,7 @@ def _dispatch_week_ready(
     last_ticket_id: str | None = None
     for token in tokens:
         try:
-            last_ticket_id = send_expo_push(
+            last_ticket_id = send_expo_push_with_one_retry(
                 token.expo_push_token,
                 "Your week is ready",
                 "Your meal ideas and grocery list are ready to review.",

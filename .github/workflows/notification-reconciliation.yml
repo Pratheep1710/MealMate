@@ -1,0 +1,47 @@
+name: Notification receipt reconciliation
+
+# MP-073: follow-up job ~30-40 min after both daily 8 PM IST sweeps (daily-reminder.yml and
+# weekly-generation.yml both fire at 14:30 UTC) — checks Expo's receipt API for every 'sent'
+# notification_log row from either sweep and reconciles it to 'delivered' or 'failed'. Deliberately
+# a separate schedule, not chained onto either sweep: a receipt genuinely isn't ready the instant a
+# ticket is issued, and this way one sweep's slowness can't delay the other's reconciliation.
+on:
+  schedule:
+    - cron: "10 15 * * *" # 20:40 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile-notifications:
+    name: reconcile Expo delivery receipts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run notification reconciliation
+        env:
+          PYTHONPATH: .
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
+          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          EXPO_ACCESS_TOKEN: ${{ secrets.EXPO_ACCESS_TOKEN }}
+        run: python scripts/run_notification_reconciliation.py
