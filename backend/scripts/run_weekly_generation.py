@@ -53,9 +53,10 @@ def _dispatch_week_ready(
 
     tokens = push_tokens_repo.list_tokens_for_user(conn, outcome.job.user_id)
     last_ticket_id: str | None = None
+    any_sent = False
     for token in tokens:
         try:
-            last_ticket_id = send_expo_push_with_one_retry(
+            ticket_id = send_expo_push_with_one_retry(
                 token.expo_push_token,
                 "Your week is ready",
                 "Your meal ideas and grocery list are ready to review.",
@@ -63,8 +64,19 @@ def _dispatch_week_ready(
             )
         except (PushSendError, httpx.HTTPError) as exc:
             logger.warning("week_ready.send_failed", error_type=type(exc).__name__)
+            # PR review fix (MP-071): audit this device's failure individually — the weekly sender
+            # had the same "last ticket wins" gap as the daily reminder's.
+            notifications_repo.record_device_result(
+                conn, notification.id, token.expo_push_token, "failed", error=str(exc)
+            )
+            continue
+        notifications_repo.record_device_result(
+            conn, notification.id, token.expo_push_token, "sent", expo_ticket_id=ticket_id
+        )
+        last_ticket_id = ticket_id
+        any_sent = True
 
-    if last_ticket_id is None:
+    if not any_sent:
         notifications_repo.mark_status(conn, notification.id, "failed", increment_attempt=True)
         conn.commit()
         return False

@@ -408,4 +408,77 @@ describe('WeekPlanScreen', () => {
 
     expect(textOf(tree)).toContain('Actually, cooking this');
   });
+
+  // PR review fix: this screen stays mounted underneath DayReviewEditScreen's route, so an edit
+  // made there (swap/add/remove/carry-over) must be visible here on return — not just on the next
+  // userId change. Drives the real navigation flow (tap "Review & edit" -> pop back) rather than
+  // asserting on the effect internals, so a regression here would mean a stale plan on screen, not
+  // just a missing hook call.
+  it('refetches the plan when returning from Review & edit, not just on the initial mount', async () => {
+    mockFrom.mockReturnValue(
+      chainable({
+        data: [
+          todayRow({
+            plan_items: [
+              {
+                id: 'item-1',
+                item_type: 'rice',
+                status: 'filled',
+                make_extra: false,
+                dishes: { name: 'Sambar Sadam' },
+              },
+              {
+                id: 'item-2',
+                item_type: 'poriyal',
+                status: 'filled',
+                make_extra: false,
+                dishes: { name: 'Cabbage Poriyal' },
+              },
+            ],
+          }),
+        ],
+        error: null,
+      }),
+    );
+    let capturedNavigation: { goBack: () => void } | null = null;
+    function DummyEditScreen({ navigation }: { navigation: { goBack: () => void } }) {
+      capturedNavigation = navigation;
+      return null;
+    }
+
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(
+        <NavigationContainer>
+          <Stack.Navigator>
+            <Stack.Screen name="WeekPlan" component={WeekPlanScreen} />
+            <Stack.Screen name="DayReviewEdit" component={DummyEditScreen} />
+          </Stack.Navigator>
+        </NavigationContainer>,
+      );
+      await flushAsync();
+      await flushAsync();
+    });
+    expect(mockFrom).toHaveBeenCalledTimes(1);
+
+    const slotRow = tree!.root.findByProps({ testID: 'slot-row-night' });
+    await act(async () => {
+      slotRow.props.onPress();
+      await flushAsync();
+    });
+    const reviewButton = tree!.root.findByProps({ testID: 'review-day-button' });
+    await act(async () => {
+      reviewButton.props.onPress();
+      await flushAsync();
+    });
+
+    expect(capturedNavigation).toBeTruthy();
+    await act(async () => {
+      capturedNavigation!.goBack();
+      await flushAsync();
+      await flushAsync();
+    });
+
+    expect(mockFrom).toHaveBeenCalledTimes(2);
+  });
 });

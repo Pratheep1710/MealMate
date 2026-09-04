@@ -14,10 +14,11 @@ import threading
 import uuid
 
 import psycopg
+import pytest
 from psycopg.rows import DictRow, dict_row
 
 from app.repositories import notifications as notifications_repo
-from app.services import reminder_claim
+from app.services import push_dispatch, reminder_claim
 
 
 def _make_user(conn: psycopg.Connection[DictRow], user_id: uuid.UUID) -> None:
@@ -40,7 +41,13 @@ def test_claim_reminder_sequential_double_call_only_returns_once(conn, make_user
     assert second is None
 
 
-def test_claim_reminder_reclaims_after_a_failed_attempt_within_the_retry_budget(conn, make_user):
+def test_claim_reminder_does_not_reclaim_after_a_single_failed_attempt(conn, make_user):
+    """PR review fix: try_claim used to reclaim a 'failed' row while attempt < 2, on the old
+    assumption that one claimed run makes exactly one real Expo attempt. Now that
+    push_dispatch.send_expo_push_with_one_retry spends the *entire* same-evening retry budget
+    (initial attempt + one retry) inside a single claimed call, a 'failed' row has nothing left to
+    reclaim — a later run must not get a second bite.
+    """
     user_id = make_user()
     target_date = datetime.date(2026, 8, 24)
 
@@ -50,25 +57,41 @@ def test_claim_reminder_reclaims_after_a_failed_attempt_within_the_retry_budget(
 
     second = reminder_claim.claim_reminder(conn, user_id, target_date)
 
-    assert second is not None
-    assert second.status == "processing"
-    assert second.attempt == 1
+    assert second is None
 
 
-def test_claim_reminder_does_not_reclaim_after_the_retry_budget_is_used(conn, make_user):
+def test_claim_reminder_does_not_reclaim_after_a_double_failure_exhausts_the_retry_budget(
+    conn, make_user, monkeypatch
+):
+    """End-to-end: the claim/job path invoked again after send_expo_push_with_one_retry has
+    already made its two real Expo attempts (one initial + one retry, both within the first
+    claimed call) and the row is marked failed — a second claim must return None, so a later
+    scheduled/manual run can't draw two more attempts on top of those two (four total instead of
+    the two MP-072's policy allows).
+    """
     user_id = make_user()
     target_date = datetime.date(2026, 8, 24)
 
     first = reminder_claim.claim_reminder(conn, user_id, target_date)
     assert first is not None
+
+    attempts: list[int] = []
+
+    def fake_send(*args: object, **kwargs: object) -> str:
+        attempts.append(1)
+        raise push_dispatch.PushSendError("boom")
+
+    monkeypatch.setattr(push_dispatch, "send_expo_push", fake_send)
+
+    with pytest.raises(push_dispatch.PushSendError):
+        push_dispatch.send_expo_push_with_one_retry("token", "title", "body", None)
+    assert len(attempts) == 2  # the entire same-evening budget, spent within this one claim
+
     notifications_repo.mark_status(conn, first.id, "failed", increment_attempt=True)
+
     second = reminder_claim.claim_reminder(conn, user_id, target_date)
-    assert second is not None
-    notifications_repo.mark_status(conn, second.id, "failed", increment_attempt=True)
 
-    third = reminder_claim.claim_reminder(conn, user_id, target_date)
-
-    assert third is None
+    assert second is None
 
 
 def test_claim_reminder_never_reclaims_once_sent(conn, make_user):

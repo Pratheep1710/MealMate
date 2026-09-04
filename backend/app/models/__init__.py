@@ -7,7 +7,7 @@ schema change and a model change should always land in the same commit.
 from app.models.availability import AvailableIngredient, GroceryListSnapshot
 from app.models.dish import Dish, DishIngredient, Ingredient, IngredientAlias
 from app.models.job import GenerationJob
-from app.models.notification import NotificationLog
+from app.models.notification import NotificationLog, NotificationLogDevice
 from app.models.plan import MealPlan, PlanItem
 from app.models.profile import UserFavoriteDish, UserProfile
 from app.models.push_token import PushToken
@@ -22,6 +22,7 @@ __all__ = [
     "IngredientAlias",
     "MealPlan",
     "NotificationLog",
+    "NotificationLogDevice",
     "PlanItem",
     "PushToken",
     "UserFavoriteDish",

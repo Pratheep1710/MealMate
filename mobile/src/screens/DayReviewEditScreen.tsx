@@ -56,6 +56,7 @@ type SwapCandidate = {
   track_variety: boolean;
   used_this_week: boolean;
   used_recently: boolean;
+  exceeds_nonveg_quota: boolean;
 };
 
 type DishOption = { id: string; name: string; veg_or_nonveg: string; dietary_flags: string[] };
@@ -63,8 +64,13 @@ type DishOption = { id: string; name: string; veg_or_nonveg: string; dietary_fla
 type ViewState = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; plans: MealPlanRow[] };
 
 type SwapSheetState = { planItemId: string; itemType: string } | null;
-type AddSheetState = { planId: string; slot: Slot } | null;
-type CarrySheetState = { sourcePlanItemId: string; itemType: string } | null;
+type AddSheetState = { planId: string; slot: Slot; existingItemTypes: string[] } | null;
+type CarrySheetState = {
+  sourcePlanItemId: string;
+  itemType: string;
+  targetPlanId: string | null;
+  targetSlotLabel: string | null;
+} | null;
 
 async function fetchDayPlan(planDate: string): Promise<MealPlanRow[]> {
   const { data, error } = await supabase
@@ -291,23 +297,43 @@ export function DayReviewEditScreen() {
               <Text style={styles.slotHeading}>
                 {meta.label} · {meta.time}
               </Text>
-              {plan.plan_items.map((item) => (
-                <PlanItemRowView
-                  key={item.id}
-                  item={item}
-                  busy={busyItemId === item.id}
-                  onSwap={() => setSwapSheet({ planItemId: item.id, itemType: item.item_type })}
-                  onRemove={() => handleRemove(item.id)}
-                  onMakeExtra={
-                    item.status === 'filled'
-                      ? () => setCarrySheet({ sourcePlanItemId: item.id, itemType: item.item_type })
-                      : undefined
-                  }
-                />
-              ))}
+              {plan.plan_items.map((item) => {
+                // PR review fix (MP-064): make-extra only ever carries into the very next
+                // chronological slot of the same day (functional spec §6.3's own example — lunch
+                // reused for dinner) — the RPC now enforces this too, but deriving the one valid
+                // target here means the sheet never offers a choice that would just be rejected.
+                const nextSlot = CHRONOLOGICAL_SLOTS[index + 1] ?? null;
+                const nextPlan = nextSlot ? (slotsForToday[index + 1] ?? null) : null;
+                return (
+                  <PlanItemRowView
+                    key={item.id}
+                    item={item}
+                    busy={busyItemId === item.id}
+                    onSwap={() => setSwapSheet({ planItemId: item.id, itemType: item.item_type })}
+                    onRemove={() => handleRemove(item.id)}
+                    onMakeExtra={
+                      item.status === 'filled'
+                        ? () =>
+                            setCarrySheet({
+                              sourcePlanItemId: item.id,
+                              itemType: item.item_type,
+                              targetPlanId: nextPlan ? nextPlan.id : null,
+                              targetSlotLabel: nextSlot ? SLOT_META[nextSlot].label : null,
+                            })
+                        : undefined
+                    }
+                  />
+                );
+              })}
               <TouchableOpacity
                 style={styles.addRow}
-                onPress={() => setAddSheet({ planId: plan.id, slot })}
+                onPress={() =>
+                  setAddSheet({
+                    planId: plan.id,
+                    slot,
+                    existingItemTypes: plan.plan_items.map((item) => item.item_type),
+                  })
+                }
                 testID={`add-item-${slot}`}
                 accessibilityRole="button"
               >
@@ -334,7 +360,6 @@ export function DayReviewEditScreen() {
       />
       <CarryOverSheet
         target={carrySheet}
-        slots={view.plans.map((plan) => ({ planId: plan.id, slot: plan.slot }))}
         onClose={() => setCarrySheet(null)}
         onPick={handleCarryOver}
       />
@@ -384,16 +409,37 @@ function PlanItemRowView({
 
 // MP-062: dismissible advisory only — generation-time rules are strict, edit-time rules are
 // advisory (functional spec §6: "A human explicitly choosing something is the supervision").
-// Neither badge below disables the row or blocks the tap; they're informational text next to a
-// choice the user can still make.
-function AdvisoryBadges({ candidate }: { candidate: SwapCandidate }) {
-  if (!candidate.used_this_week && !candidate.used_recently) {
+// Neither badge below disables the row or blocks the tap (dismissing them is purely visual — see
+// SwapSheet's onPick, unchanged by dismissedDishIds); they're informational text next to a choice
+// the user can still make, with a way to clear the note once it's been seen.
+function AdvisoryBadges({
+  candidate,
+  dismissed,
+  onDismiss,
+}: {
+  candidate: SwapCandidate;
+  dismissed: boolean;
+  onDismiss: () => void;
+}) {
+  const hasAdvisory =
+    candidate.used_this_week || candidate.used_recently || candidate.exceeds_nonveg_quota;
+  if (!hasAdvisory || dismissed) {
     return null;
   }
   return (
     <View style={styles.badgeRow}>
       {candidate.used_this_week && <Text style={styles.badge}>Already used this week</Text>}
       {candidate.used_recently && <Text style={styles.badge}>Used in the last 10 days</Text>}
+      {candidate.exceeds_nonveg_quota && (
+        <Text style={styles.badge}>Over your non-veg quota this week</Text>
+      )}
+      <TouchableOpacity
+        onPress={onDismiss}
+        hitSlop={8}
+        testID={`dismiss-badges-${candidate.dish_id}`}
+      >
+        <Text style={styles.badgeDismiss}>×</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -436,6 +482,7 @@ function SwapSheet({
   onPick: (planItemId: string, dishId: string, dishName: string) => void;
 }) {
   const [candidates, setCandidates] = useState<SwapCandidate[] | null>(null);
+  const [dismissedDishIds, setDismissedDishIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!target) {
@@ -444,6 +491,7 @@ function SwapSheet({
       // accepts for a close-triggered reset (see WeekPlanScreen.tsx's matching case).
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCandidates(null);
+      setDismissedDishIds(new Set());
       return;
     }
     let cancelled = false;
@@ -475,7 +523,13 @@ function SwapSheet({
               testID={`candidate-${candidate.dish_id}`}
             >
               <Text style={styles.candidateName}>{candidate.name}</Text>
-              <AdvisoryBadges candidate={candidate} />
+              <AdvisoryBadges
+                candidate={candidate}
+                dismissed={dismissedDishIds.has(candidate.dish_id)}
+                onDismiss={() =>
+                  setDismissedDishIds((current) => new Set(current).add(candidate.dish_id))
+                }
+              />
             </TouchableOpacity>
             <FavoriteStar
               dishId={candidate.dish_id}
@@ -549,12 +603,22 @@ function AddItemSheet({
     };
   }, [itemType, target]);
 
+  // PR review fix (MP-060 AC): add is for a *missing* item type only — offering a type the slot
+  // already has would just be rejected by add_plan_item_to_slot's own guard, and (before that
+  // guard existed) silently produced a second ordinary item of that type in the slot.
+  const addableTypes = ADDABLE_ITEM_TYPES.filter(
+    (option) => !target?.existingItemTypes.includes(option),
+  );
+
   return (
     <BottomSheet visible={!!target} onClose={onClose}>
       <Text style={styles.sheetTitle}>Add to {target?.slot}</Text>
       {!itemType ? (
         <View style={styles.chipRow}>
-          {ADDABLE_ITEM_TYPES.map((option) => (
+          {addableTypes.length === 0 && (
+            <Text style={styles.infoBody}>This slot already has every item type.</Text>
+          )}
+          {addableTypes.map((option) => (
             <TouchableOpacity
               key={option}
               style={styles.chip}
@@ -595,33 +659,30 @@ function AddItemSheet({
 
 function CarryOverSheet({
   target,
-  slots,
   onClose,
   onPick,
 }: {
   target: CarrySheetState;
-  slots: { planId: string; slot: Slot }[];
   onClose: () => void;
   onPick: (sourcePlanItemId: string, targetPlanId: string) => void;
 }) {
   return (
     <BottomSheet visible={!!target} onClose={onClose}>
-      <Text style={styles.sheetTitle}>Carry {target?.itemType} into…</Text>
+      <Text style={styles.sheetTitle}>Carry {target?.itemType}</Text>
       <Text style={styles.infoBody}>
         Reuses the same dish on purpose — it won&apos;t count as a repeat.
       </Text>
-      <View style={styles.chipRow}>
-        {slots.map(({ planId, slot }) => (
-          <TouchableOpacity
-            key={planId}
-            style={styles.chip}
-            onPress={() => target && onPick(target.sourcePlanItemId, planId)}
-            testID={`carry-target-${slot}`}
-          >
-            <Text style={styles.chipLabel}>{SLOT_META[slot].label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {target?.targetPlanId ? (
+        <TouchableOpacity
+          style={styles.chip}
+          onPress={() => onPick(target.sourcePlanItemId, target.targetPlanId as string)}
+          testID="carry-target-next-slot"
+        >
+          <Text style={styles.chipLabel}>Carry into {target.targetSlotLabel}</Text>
+        </TouchableOpacity>
+      ) : (
+        <Text style={styles.infoBody}>No later slot today to carry this into.</Text>
+      )}
     </BottomSheet>
   );
 }
@@ -745,7 +806,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.textPrimary,
   },
-  badgeRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   badge: {
     fontFamily: fonts.bodyRegular,
     fontSize: 11,
@@ -754,6 +815,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: radii.pill,
+  },
+  badgeDismiss: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: 14,
+    color: colors.textMuted,
   },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   chip: {

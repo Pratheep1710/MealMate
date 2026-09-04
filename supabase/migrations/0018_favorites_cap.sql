@@ -28,6 +28,13 @@ begin
     return new;
   end if;
 
+  -- PR review fix: without a lock, two concurrent inserts of *different* dishes for the same user
+  -- (two connections, two BEFORE INSERT triggers) can both read existing_count below the cap,
+  -- both pass this check, and both commit — nine rows past an 8-row cap. Locking the user's own
+  -- profile row serializes concurrent favorites inserts for that one user (nobody else's inserts
+  -- wait on it) so the count read below is never stale by the time this trigger's INSERT commits.
+  perform 1 from user_profiles where id = new.user_id for update;
+
   select count(*) into existing_count
   from user_favorite_dishes
   where user_id = new.user_id;

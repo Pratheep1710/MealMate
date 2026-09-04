@@ -6,7 +6,7 @@ import { createTestDb, createAuthUser, asUser, asAnon, asServiceRole, reset, USE
 // evidence per the brief's AC for this task. Own-data access is also asserted where it matters,
 // so a broken "allow" policy would fail loudly rather than being masked by an overly strict one.
 
-let db, dishId, altDishId, planA, planB, itemA, itemB;
+let db, dishId, altDishId, planA, planB, itemA, itemB, notificationLogA, notificationDeviceA;
 
 beforeEach(async () => {
   db = await createTestDb();
@@ -44,10 +44,16 @@ beforeEach(async () => {
     `insert into dishes (name, item_type, veg_or_nonveg) values ('Dosa', 'tiffin', 'veg') returning id`
   );
   altDishId = altDish.rows[0].id;
-  await db.query(
-    `insert into notification_log (user_id, notification_type, target_date) values ($1, 'daily_reminder', '2026-08-24')`,
+  const notifA = await db.query(
+    `insert into notification_log (user_id, notification_type, target_date) values ($1, 'daily_reminder', '2026-08-24') returning id`,
     [USER_A]
   );
+  notificationLogA = notifA.rows[0].id;
+  const notifDeviceA = await db.query(
+    `insert into notification_log_devices (notification_log_id, expo_push_token, status, expo_ticket_id) values ($1, 'ExponentPushToken[test]', 'sent', 'ticket-1') returning id`,
+    [notificationLogA]
+  );
+  notificationDeviceA = notifDeviceA.rows[0].id;
   await db.query(`insert into generation_jobs (user_id, week_start) values ($1, '2026-08-24')`, [USER_A]);
   const ing = await db.query(`insert into ingredients (canonical_name) values ('Rice') returning id`);
   await db.query(
@@ -317,6 +323,28 @@ describe('generation_jobs / notification_log — read-only to owner, no cross-us
     const res = await db.query(`select * from notification_log where user_id = $1`, [USER_A]);
     expect(res.rows).toHaveLength(0);
   });
+
+  it("other user's notification_log_devices are invisible", async () => {
+    await asUser(db, USER_B);
+    const res = await db.query(`select * from notification_log_devices where id = $1`, [notificationDeviceA]);
+    expect(res.rows).toHaveLength(0);
+  });
+
+  it('owner can read their own notification_log_devices', async () => {
+    await asUser(db, USER_A);
+    const res = await db.query(`select * from notification_log_devices where id = $1`, [notificationDeviceA]);
+    expect(res.rows).toHaveLength(1);
+  });
+
+  it('users cannot write notification_log_devices directly (service_role only)', async () => {
+    await asUser(db, USER_A);
+    await expect(
+      db.query(
+        `insert into notification_log_devices (notification_log_id, expo_push_token, status) values ($1, 'ExponentPushToken[hack]', 'sent')`,
+        [notificationLogA]
+      )
+    ).rejects.toThrow();
+  });
 });
 
 describe('available_ingredients — full CRUD for owner, denied cross-user', () => {
@@ -410,6 +438,30 @@ describe('swap_plan_item — RLS-scoped RPC (MP-058/059)', () => {
     ).rejects.toThrow(/dietary restrictions/);
   });
 
+  it('a dish unavailable in Reserves mode is rejected even via a direct RPC call', async () => {
+    // PR review fix: list_swap_candidates already filtered these out of the candidate list, but
+    // swap_plan_item itself never checked — calling it directly with a hand-picked dish (not one
+    // the UI ever offered) previously bypassed Reserves eligibility entirely.
+    await asServiceRole(db);
+    const unavailable = await db.query(
+      `insert into dishes (name, item_type, veg_or_nonveg) values ('Needs Fresh Fish', 'tiffin', 'nonveg') returning id`
+    );
+    const ingredient = await db.query(
+      `insert into ingredients (canonical_name, is_staple) values ('Fresh Fish', false) returning id`
+    );
+    await db.query(`insert into dish_ingredients (dish_id, ingredient_id) values ($1, $2)`, [
+      unavailable.rows[0].id,
+      ingredient.rows[0].id,
+    ]);
+    await db.query(`update user_profiles set planning_mode = 'reserves' where id = $1`, [USER_A]);
+    await reset(db);
+
+    await asUser(db, USER_A);
+    await expect(
+      db.query(`select swap_plan_item($1, $2)`, [itemA, unavailable.rows[0].id])
+    ).rejects.toThrow(/Reserves/);
+  });
+
   it('anon cannot call the swap RPC', async () => {
     await asAnon(db);
     await expect(db.query(`select swap_plan_item($1, $2)`, [itemA, altDishId])).rejects.toThrow();
@@ -417,13 +469,28 @@ describe('swap_plan_item — RLS-scoped RPC (MP-058/059)', () => {
 });
 
 describe('add_plan_item_to_slot — RLS-scoped RPC (MP-060)', () => {
-  it('the owner can add a new item to their own meal plan', async () => {
+  it('the owner can add a new item of a type the slot is missing', async () => {
+    await asServiceRole(db);
+    const riceDish = await db.query(
+      `insert into dishes (name, item_type, veg_or_nonveg) values ('Plain Rice', 'rice', 'veg') returning id`
+    );
+    await reset(db);
+
     await asUser(db, USER_A);
-    const res = await db.query(`select * from add_plan_item_to_slot($1, 'tiffin', $2)`, [planA, altDishId]);
-    expect(res.rows[0].dish_id).toBe(altDishId);
+    const res = await db.query(`select * from add_plan_item_to_slot($1, 'rice', $2)`, [planA, riceDish.rows[0].id]);
+    expect(res.rows[0].dish_id).toBe(riceDish.rows[0].id);
 
     const items = await db.query(`select count(*)::int as n from plan_items where plan_id = $1`, [planA]);
     expect(items.rows[0].n).toBe(2);
+  });
+
+  it('the owner cannot add a second item of a type the slot already has', async () => {
+    // PR review fix (MP-060 AC): planA already has a tiffin item (itemA, from beforeEach) — add
+    // is for a *missing* item type only, not a second one.
+    await asUser(db, USER_A);
+    await expect(
+      db.query(`select add_plan_item_to_slot($1, 'tiffin', $2)`, [planA, altDishId])
+    ).rejects.toThrow(/already has a tiffin item/);
   });
 
   it("a user cannot add to another user's meal plan", async () => {
@@ -457,10 +524,12 @@ describe('remove_plan_item — RLS-scoped RPC (MP-060)', () => {
 });
 
 describe('carry_over_plan_item — RLS-scoped RPC (MP-064, make_extra)', () => {
-  it('the owner can carry a filled item into another slot of their own, flagged make_extra', async () => {
+  it('the owner can carry a filled item into the next slot of their own day, flagged make_extra', async () => {
+    // itemA (from beforeEach) is in planA's 'morning' slot — plan_slot_order's next slot is
+    // 'snack_1', not an arbitrary later one.
     await asServiceRole(db);
     const targetPlan = await db.query(
-      `insert into meal_plans (user_id, plan_date, slot) values ($1, '2026-08-24', 'night') returning id`,
+      `insert into meal_plans (user_id, plan_date, slot) values ($1, '2026-08-24', 'snack_1') returning id`,
       [USER_A]
     );
     await reset(db);
@@ -469,6 +538,22 @@ describe('carry_over_plan_item — RLS-scoped RPC (MP-064, make_extra)', () => {
     const res = await db.query(`select * from carry_over_plan_item($1, $2)`, [itemA, targetPlan.rows[0].id]);
     expect(res.rows[0].dish_id).toBe(dishId);
     expect(res.rows[0].make_extra).toBe(true);
+  });
+
+  it('the owner cannot carry into a slot that is not the very next one', async () => {
+    // PR review fix (MP-064 AC): 'night' is same-day but not adjacent to 'morning' — must be
+    // rejected the same way a same-slot or backward target would be.
+    await asServiceRole(db);
+    const farPlan = await db.query(
+      `insert into meal_plans (user_id, plan_date, slot) values ($1, '2026-08-24', 'night') returning id`,
+      [USER_A]
+    );
+    await reset(db);
+
+    await asUser(db, USER_A);
+    await expect(
+      db.query(`select carry_over_plan_item($1, $2)`, [itemA, farPlan.rows[0].id])
+    ).rejects.toThrow(/next slot of the same day/);
   });
 
   it("a user cannot carry another user's item into their own plan", async () => {

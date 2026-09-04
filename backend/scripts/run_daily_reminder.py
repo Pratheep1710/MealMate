@@ -78,20 +78,34 @@ def main() -> int:
 
             tokens = push_tokens_repo.list_tokens_for_user(conn, user_id)
             last_ticket_id: str | None = None
+            any_sent = False
             for token in tokens:
                 try:
-                    last_ticket_id = send_expo_push_with_one_retry(
+                    ticket_id = send_expo_push_with_one_retry(
                         token.expo_push_token, title, body, config.expo.access_token
                     )
                 except (PushSendError, httpx.HTTPError) as exc:
                     logger.info(
                         "daily_reminder.send_failed", user_id=str(user_id), error=str(exc)
                     )
+                    # PR review fix (MP-071): record this device's own failed attempt rather than
+                    # letting it disappear when another of the user's devices succeeds below.
+                    notifications_repo.record_device_result(
+                        conn, notification.id, token.expo_push_token, "failed", error=str(exc)
+                    )
+                    continue
+                notifications_repo.record_device_result(
+                    conn, notification.id, token.expo_push_token, "sent", expo_ticket_id=ticket_id
+                )
+                last_ticket_id = ticket_id
+                any_sent = True
 
             # One attempt per run regardless of device count — a multi-device user's second and
             # third sends aren't retries of a failure, so they shouldn't consume the "one same-day
-            # retry" budget notifications_repo.try_claim enforces.
-            if last_ticket_id is not None:
+            # retry" budget notifications_repo.try_claim enforces. expo_ticket_id on the parent row
+            # is now purely informational (one representative ticket) — reconciliation reads the
+            # per-device rows recorded above, not this one.
+            if any_sent:
                 notifications_repo.mark_status(
                     conn,
                     notification.id,

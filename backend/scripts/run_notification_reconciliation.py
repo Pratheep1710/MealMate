@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import sys
+import uuid
 from dataclasses import dataclass
 
 from app.config import ConfigError, load_config
@@ -38,26 +39,39 @@ class ReconciliationResult:
 
 
 def reconcile(conn, access_token: str | None, *, before: datetime.datetime) -> ReconciliationResult:
-    pending = notifications_repo.list_sent_awaiting_reconciliation(conn, before=before)
+    """PR review fix (MP-071/073): reconciles per-device rows (0020_notification_log_devices.sql),
+    not the single last-ticket-wins column on the parent notification_log row — a multi-device
+    user's every send gets its own receipt check. Each parent notification whose devices were
+    touched this run is then rolled up (any device delivered -> 'delivered'; every device failed ->
+    'failed'; otherwise left 'sent' for a later run), so the aggregate status/SLO reads on
+    notification_log stay correct without a caller having to reconcile devices itself.
+    """
+    pending = notifications_repo.list_devices_awaiting_reconciliation(conn, before=before)
     if not pending:
         return ReconciliationResult(delivered=0, failed=0, still_pending=0)
 
-    by_ticket = {row.expo_ticket_id: row for row in pending if row.expo_ticket_id}
+    by_ticket = {device.expo_ticket_id: device for device in pending if device.expo_ticket_id}
     receipts = get_expo_receipts(list(by_ticket.keys()), access_token)
 
     delivered = failed = still_pending = 0
-    for ticket_id, notification in by_ticket.items():
+    touched_notification_ids: set[uuid.UUID] = set()
+    for ticket_id, device in by_ticket.items():
         receipt = receipts.get(ticket_id)
         if receipt is None:
             # Not yet available from Expo — leave 'sent' for a later run rather than guessing.
             still_pending += 1
             continue
-        if receipt.get("status") == "ok":
-            notifications_repo.mark_status(conn, notification.id, "delivered")
+        status = "delivered" if receipt.get("status") == "ok" else "failed"
+        notifications_repo.mark_device_status(conn, device.id, status)
+        touched_notification_ids.add(device.notification_log_id)
+        if status == "delivered":
             delivered += 1
         else:
-            notifications_repo.mark_status(conn, notification.id, "failed")
             failed += 1
+        conn.commit()
+
+    for notification_id in touched_notification_ids:
+        notifications_repo.sync_notification_status_from_devices(conn, notification_id)
         conn.commit()
 
     return ReconciliationResult(delivered=delivered, failed=failed, still_pending=still_pending)
