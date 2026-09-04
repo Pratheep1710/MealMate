@@ -568,6 +568,7 @@ class TestListSwapCandidates:
             plan_date=_WEEK_START,
             item_type="gravy",
             dish_id=other_nonveg_dish,
+            slot="afternoon",
         )
         target_dish = _dish(conn, "Snack Slot", item_type="snack")
         target_item = _plan_item(
