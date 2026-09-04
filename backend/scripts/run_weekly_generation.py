@@ -18,7 +18,7 @@ from app.services.generation_context import build_generation_catalog
 from app.services.generation_engine import GenerationOutcome, run_generation_engine
 from app.services.openai_generation import OpenAIWeeklyMenuGenerator
 from app.services.planning_trigger import compute_trigger
-from app.services.push_dispatch import PushSendError, send_expo_push
+from app.services.push_dispatch import PushSendError, send_expo_push_with_one_retry
 
 logger = get_logger(__name__)
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -53,9 +53,10 @@ def _dispatch_week_ready(
 
     tokens = push_tokens_repo.list_tokens_for_user(conn, outcome.job.user_id)
     last_ticket_id: str | None = None
+    any_sent = False
     for token in tokens:
         try:
-            last_ticket_id = send_expo_push(
+            ticket_id = send_expo_push_with_one_retry(
                 token.expo_push_token,
                 "Your week is ready",
                 "Your meal ideas and grocery list are ready to review.",
@@ -63,8 +64,19 @@ def _dispatch_week_ready(
             )
         except (PushSendError, httpx.HTTPError) as exc:
             logger.warning("week_ready.send_failed", error_type=type(exc).__name__)
+            # PR review fix (MP-071): audit this device's failure individually — the weekly sender
+            # had the same "last ticket wins" gap as the daily reminder's.
+            notifications_repo.record_device_result(
+                conn, notification.id, token.expo_push_token, "failed", error=str(exc)
+            )
+            continue
+        notifications_repo.record_device_result(
+            conn, notification.id, token.expo_push_token, "sent", expo_ticket_id=ticket_id
+        )
+        last_ticket_id = ticket_id
+        any_sent = True
 
-    if last_ticket_id is None:
+    if not any_sent:
         notifications_repo.mark_status(conn, notification.id, "failed", increment_attempt=True)
         conn.commit()
         return False

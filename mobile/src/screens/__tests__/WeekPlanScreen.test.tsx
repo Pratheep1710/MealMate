@@ -11,10 +11,14 @@ const days = rollingDays(new Date());
 const today = days[0].iso;
 
 const mockFrom = jest.fn();
+const mockRpc = jest.fn();
 const mockUseSession = jest.fn();
 
 jest.mock('../../lib/supabase', () => ({
-  supabase: { from: (...args: unknown[]) => mockFrom(...args) },
+  supabase: {
+    from: (...args: unknown[]) => mockFrom(...args),
+    rpc: (...args: unknown[]) => mockRpc(...args),
+  },
 }));
 
 jest.mock('../../contexts/SessionContext', () => ({
@@ -102,6 +106,7 @@ beforeEach(async () => {
   jest.clearAllMocks();
   await AsyncStorage.clear();
   mockUseSession.mockReturnValue({ session: { user: { id: 'user-1' } } });
+  mockRpc.mockReturnValue(Promise.resolve({ data: [], error: null }));
 });
 
 describe('WeekPlanScreen', () => {
@@ -191,16 +196,79 @@ describe('WeekPlanScreen', () => {
     expect(textOf(tree)).toContain('Idli');
   });
 
-  it('opens a calm, inert detail sheet when a slot is tapped — no fake edit options', async () => {
+  // MP-059: a single-item slot (this fixture's default "night" row has exactly one plan item)
+  // offers a real, near-instant quick swap — fetched via list_swap_candidates, not the old inert
+  // placeholder copy.
+  it('opens the real quick-swap list for a single-item slot', async () => {
     mockFrom.mockReturnValue(chainable({ data: [todayRow()], error: null }));
+    mockRpc.mockReturnValue(
+      Promise.resolve({
+        data: [
+          {
+            dish_id: 'dish-2',
+            name: 'Curd Rice',
+            used_this_week: false,
+            used_recently: true,
+          },
+        ],
+        error: null,
+      }),
+    );
 
     const tree = await renderScreen();
     const slotRow = tree.root.findByProps({ testID: 'slot-row-night' });
     await act(async () => {
       slotRow.props.onPress();
+      await flushAsync();
     });
 
-    expect(textOf(tree)).toContain('Swapping opens up once the dish list is ready.');
+    expect(mockRpc).toHaveBeenCalledWith('list_swap_candidates', {
+      target_plan_item_id: 'item-1',
+    });
+    expect(textOf(tree)).toContain('Curd Rice');
+    expect(textOf(tree)).toContain('Used recently');
+  });
+
+  // MP-058/060: a multi-item slot (e.g. afternoon's rice+gravy+poriyal) needs per-item choice,
+  // which only DayReviewEditScreen offers — this sheet hands off there instead of guessing which
+  // item a one-tap swap should target.
+  it('offers "Review & edit" instead of a quick swap for a multi-item slot', async () => {
+    mockFrom.mockReturnValue(
+      chainable({
+        data: [
+          todayRow({
+            plan_items: [
+              {
+                id: 'item-1',
+                item_type: 'rice',
+                status: 'filled',
+                make_extra: false,
+                dishes: { name: 'Sambar Sadam' },
+              },
+              {
+                id: 'item-2',
+                item_type: 'poriyal',
+                status: 'filled',
+                make_extra: false,
+                dishes: { name: 'Cabbage Poriyal' },
+              },
+            ],
+          }),
+        ],
+        error: null,
+      }),
+    );
+
+    const tree = await renderScreen();
+    const slotRow = tree.root.findByProps({ testID: 'slot-row-night' });
+    await act(async () => {
+      slotRow.props.onPress();
+      await flushAsync();
+    });
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(textOf(tree)).toContain('more than one item');
+    expect(tree.root.findByProps({ testID: 'review-day-button' })).toBeTruthy();
   });
 
   it('opens a calm, inert info sheet from "New ideas" — no scope picker that leads nowhere', async () => {
@@ -339,5 +407,78 @@ describe('WeekPlanScreen', () => {
     });
 
     expect(textOf(tree)).toContain('Actually, cooking this');
+  });
+
+  // PR review fix: this screen stays mounted underneath DayReviewEditScreen's route, so an edit
+  // made there (swap/add/remove/carry-over) must be visible here on return — not just on the next
+  // userId change. Drives the real navigation flow (tap "Review & edit" -> pop back) rather than
+  // asserting on the effect internals, so a regression here would mean a stale plan on screen, not
+  // just a missing hook call.
+  it('refetches the plan when returning from Review & edit, not just on the initial mount', async () => {
+    mockFrom.mockReturnValue(
+      chainable({
+        data: [
+          todayRow({
+            plan_items: [
+              {
+                id: 'item-1',
+                item_type: 'rice',
+                status: 'filled',
+                make_extra: false,
+                dishes: { name: 'Sambar Sadam' },
+              },
+              {
+                id: 'item-2',
+                item_type: 'poriyal',
+                status: 'filled',
+                make_extra: false,
+                dishes: { name: 'Cabbage Poriyal' },
+              },
+            ],
+          }),
+        ],
+        error: null,
+      }),
+    );
+    let capturedNavigation: { goBack: () => void } | null = null;
+    function DummyEditScreen({ navigation }: { navigation: { goBack: () => void } }) {
+      capturedNavigation = navigation;
+      return null;
+    }
+
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(
+        <NavigationContainer>
+          <Stack.Navigator>
+            <Stack.Screen name="WeekPlan" component={WeekPlanScreen} />
+            <Stack.Screen name="DayReviewEdit" component={DummyEditScreen} />
+          </Stack.Navigator>
+        </NavigationContainer>,
+      );
+      await flushAsync();
+      await flushAsync();
+    });
+    expect(mockFrom).toHaveBeenCalledTimes(1);
+
+    const slotRow = tree!.root.findByProps({ testID: 'slot-row-night' });
+    await act(async () => {
+      slotRow.props.onPress();
+      await flushAsync();
+    });
+    const reviewButton = tree!.root.findByProps({ testID: 'review-day-button' });
+    await act(async () => {
+      reviewButton.props.onPress();
+      await flushAsync();
+    });
+
+    expect(capturedNavigation).toBeTruthy();
+    await act(async () => {
+      capturedNavigation!.goBack();
+      await flushAsync();
+      await flushAsync();
+    });
+
+    expect(mockFrom).toHaveBeenCalledTimes(2);
   });
 });

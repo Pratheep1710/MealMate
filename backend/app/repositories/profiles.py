@@ -14,6 +14,17 @@ _COLUMNS = (
     "dinner_style, planning_mode, grocery_day, timezone"
 )
 
+# MP-063: must match supabase/migrations/0018_favorites_cap.sql's `favorites_cap` constant — that
+# trigger is the real enforcement (it holds regardless of insert path, including the mobile
+# client's own direct RLS insert this backend connection never sees), this is a friendlier error
+# for any backend-driven caller (tests, admin scripts) that would otherwise just see a raw
+# Postgres check_violation.
+FAVORITES_CAP = 8
+
+
+class FavoritesCapExceeded(Exception):
+    """Raised before the insert is attempted, mirroring the DB trigger's own limit."""
+
 
 def get_profile(conn: psycopg.Connection[DictRow], user_id: uuid.UUID) -> UserProfile | None:
     row = conn.execute(
@@ -77,6 +88,14 @@ def list_favorite_dish_ids(
 
 
 def add_favorite(conn: psycopg.Connection[DictRow], user_id: uuid.UUID, dish_id: uuid.UUID) -> None:
+    """Re-adding an already-favorited dish is a no-op (`on conflict do nothing`) and never counts
+    against the cap — only a genuinely new favorite can trip `FavoritesCapExceeded`.
+    """
+    existing = list_favorite_dish_ids(conn, user_id)
+    if dish_id not in existing and len(existing) >= FAVORITES_CAP:
+        raise FavoritesCapExceeded(
+            f"user {user_id} already has {len(existing)} favorites (cap is {FAVORITES_CAP})"
+        )
     conn.execute(
         "insert into user_favorite_dishes (user_id, dish_id) values (%s, %s) "
         "on conflict do nothing",

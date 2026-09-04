@@ -24,8 +24,9 @@ def claim_reminder(
 ) -> NotificationLog | None:
     """Returns the notification_log row (status='processing') if this call won the claim and
     should proceed to send; returns None if the row was already sent/delivered, claimed by a
-    concurrent run, or has used up its one-retry budget — the caller must not call Expo in that
-    case.
+    concurrent run, or already failed (the one same-evening retry budget is spent entirely inside
+    a single claimed call — see notifications_repo.try_claim) — the caller must not call Expo in
+    that case.
     """
     notification = run_daily_reminder_dispatch(conn, user_id, target_date)
     return notifications_repo.try_claim(conn, notification.id)

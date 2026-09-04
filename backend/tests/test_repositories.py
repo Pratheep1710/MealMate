@@ -7,7 +7,12 @@ POSTGRES_TEST_HOST etc. being unset, mirroring how test_supabase_auth.py skips w
 from __future__ import annotations
 
 import datetime
+import threading
 import uuid
+
+import psycopg
+import pytest
+from psycopg.rows import dict_row
 
 from app.models import UserProfile
 from app.repositories import availability as availability_repo
@@ -84,6 +89,131 @@ class TestProfilesRepository:
 
         profiles_repo.remove_favorite(conn, user_a, dish_id)
         assert profiles_repo.list_favorite_dish_ids(conn, user_a) == []
+
+    def test_add_favorite_rejects_the_ninth_dish_before_hitting_the_db(self, conn, make_user):
+        user_id = make_user()
+        dish_ids = [_insert_dish(conn, name=f"Fav {i}") for i in range(profiles_repo.FAVORITES_CAP)]
+        for dish_id in dish_ids:
+            profiles_repo.add_favorite(conn, user_id, dish_id)
+        one_too_many = _insert_dish(conn, name="One Too Many")
+
+        with pytest.raises(profiles_repo.FavoritesCapExceeded):
+            profiles_repo.add_favorite(conn, user_id, one_too_many)
+
+        favorites = profiles_repo.list_favorite_dish_ids(conn, user_id)
+        assert len(favorites) == profiles_repo.FAVORITES_CAP
+
+    def test_re_adding_an_existing_favorite_at_the_cap_is_still_a_no_op(self, conn, make_user):
+        user_id = make_user()
+        dish_ids = [_insert_dish(conn, name=f"Fav {i}") for i in range(profiles_repo.FAVORITES_CAP)]
+        for dish_id in dish_ids:
+            profiles_repo.add_favorite(conn, user_id, dish_id)
+
+        profiles_repo.add_favorite(conn, user_id, dish_ids[0])  # already a favorite, at the cap
+
+        favorites = profiles_repo.list_favorite_dish_ids(conn, user_id)
+        assert len(favorites) == profiles_repo.FAVORITES_CAP
+
+    def test_the_db_trigger_itself_rejects_a_direct_insert_past_the_cap(self, conn, make_user):
+        """The Python check in add_favorite is a friendlier error, not the real enforcement — this
+        proves migration 0018's trigger holds even for an insert that bypasses the repository
+        function entirely (mirroring how the mobile client writes directly via RLS).
+        """
+        user_id = make_user()
+        for i in range(profiles_repo.FAVORITES_CAP):
+            dish_id = _insert_dish(conn, name=f"Direct Fav {i}")
+            conn.execute(
+                "insert into user_favorite_dishes (user_id, dish_id) values (%s, %s)",
+                (user_id, dish_id),
+            )
+        one_too_many = _insert_dish(conn, name="Direct One Too Many")
+
+        with pytest.raises(psycopg.errors.CheckViolation, match="favorites cap"):
+            conn.execute(
+                "insert into user_favorite_dishes (user_id, dish_id) values (%s, %s)",
+                (user_id, one_too_many),
+            )
+
+    def test_concurrent_inserts_for_different_dishes_cannot_together_exceed_the_cap(
+        self, pg_dsn: dict[str, str | int]
+    ) -> None:
+        """PR review fix: without a row lock, two concurrent inserts of *different* dishes for the
+        same user could both read existing_count below the cap and both commit, landing at
+        favorites_cap + 1. Opens two independent connections (mirroring two overlapping mobile
+        writes) and fires both inserts at once via a thread barrier — the same pattern as
+        test_reminder_claim.py's test_claim_reminder_under_a_real_race_only_one_caller_wins.
+        """
+        user_id = uuid.uuid4()
+        with psycopg.connect(**pg_dsn, autocommit=True, row_factory=dict_row) as setup_conn:
+            setup_conn.execute("insert into auth.users (id) values (%s)", (user_id,))
+            setup_conn.execute(
+                "insert into user_profiles (id, dietary_restrictions, grocery_day) "
+                "values (%s, %s, %s)",
+                (user_id, [], "monday"),
+            )
+            for i in range(profiles_repo.FAVORITES_CAP - 1):
+                row = setup_conn.execute(
+                    "insert into dishes (name, item_type, veg_or_nonveg) "
+                    "values (%s, 'snack', 'veg') returning id",
+                    (f"Existing Fav {i}",),
+                ).fetchone()
+                setup_conn.execute(
+                    "insert into user_favorite_dishes (user_id, dish_id) values (%s, %s)",
+                    (user_id, row["id"]),
+                )
+            race_dish_a = setup_conn.execute(
+                "insert into dishes (name, item_type, veg_or_nonveg) "
+                "values ('Race Dish A', 'snack', 'veg') returning id"
+            ).fetchone()["id"]
+            race_dish_b = setup_conn.execute(
+                "insert into dishes (name, item_type, veg_or_nonveg) "
+                "values ('Race Dish B', 'snack', 'veg') returning id"
+            ).fetchone()["id"]
+
+        results: list[object] = [None, None]
+        barrier = threading.Barrier(2)
+
+        def _attempt(index: int, dish_id: uuid.UUID) -> None:
+            with psycopg.connect(**pg_dsn, autocommit=True, row_factory=dict_row) as race_conn:
+                barrier.wait()
+                try:
+                    race_conn.execute(
+                        "insert into user_favorite_dishes (user_id, dish_id) values (%s, %s)",
+                        (user_id, dish_id),
+                    )
+                    results[index] = "ok"
+                except psycopg.errors.CheckViolation:
+                    results[index] = "rejected"
+
+        threads = [
+            threading.Thread(target=_attempt, args=(0, race_dish_a)),
+            threading.Thread(target=_attempt, args=(1, race_dish_b)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        try:
+            # Exactly one of the two concurrent inserts must win — the lock serializes them rather
+            # than letting both see the pre-race count and both succeed.
+            assert sorted(results) == ["ok", "rejected"]
+            with psycopg.connect(**pg_dsn, autocommit=True, row_factory=dict_row) as verify_conn:
+                count = verify_conn.execute(
+                    "select count(*) as n from user_favorite_dishes where user_id = %s",
+                    (user_id,),
+                ).fetchone()
+                assert count["n"] == profiles_repo.FAVORITES_CAP
+        finally:
+            # autocommit connections bypass the `conn` fixture's rollback teardown — clean up
+            # explicitly so this user's rows don't persist for the rest of the pytest session
+            # (pg_dsn is session-scoped).
+            with psycopg.connect(**pg_dsn, autocommit=True, row_factory=dict_row) as cleanup_conn:
+                cleanup_conn.execute(
+                    "delete from user_favorite_dishes where user_id = %s", (user_id,)
+                )
+                cleanup_conn.execute("delete from user_profiles where id = %s", (user_id,))
+                cleanup_conn.execute("delete from auth.users where id = %s", (user_id,))
 
     def test_planning_mode_is_insert_only_and_ignores_later_changes(self, conn, make_user):
         """Regression: upsert_profile used to include `planning_mode` in its ON CONFLICT UPDATE
@@ -614,6 +744,155 @@ class TestNotificationsRepository:
 
         assert len(results) == 1
         assert results[0].notification_type == "daily_reminder"
+
+    def test_record_device_result_persists_one_row_per_token(self, conn, make_user):
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+
+        device = notifications_repo.record_device_result(
+            conn,
+            notification.id,
+            "ExponentPushToken[a]",
+            "sent",
+            expo_ticket_id="ticket-a",
+        )
+
+        assert device.notification_log_id == notification.id
+        assert device.status == "sent"
+        assert device.expo_ticket_id == "ticket-a"
+        assert device.error is None
+
+    def test_record_device_result_can_record_a_send_failure_with_no_ticket(self, conn, make_user):
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+
+        device = notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[b]", "failed", error="DeviceNotRegistered"
+        )
+
+        assert device.status == "failed"
+        assert device.expo_ticket_id is None
+        assert device.error == "DeviceNotRegistered"
+
+    def test_list_devices_awaiting_reconciliation_only_finds_sent_rows_old_enough_with_a_ticket(
+        self, conn, make_user
+    ):
+        user_id = make_user()
+        target_date = datetime.date(2026, 8, 24)
+
+        pending_notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", target_date
+        )
+        no_ticket_notification = notifications_repo.upsert_pending(
+            conn, user_id, "week_ready", target_date
+        )
+        notifications_repo.record_device_result(  # a failed send never gets a ticket
+            conn, no_ticket_notification.id, "ExponentPushToken[a]", "failed", error="boom"
+        )
+        already_delivered = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", target_date + datetime.timedelta(days=1)
+        )
+        notifications_repo.record_device_result(
+            conn,
+            already_delivered.id,
+            "ExponentPushToken[a]",
+            "delivered",
+            expo_ticket_id="ticket-old",
+        )
+        reconcilable = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", target_date + datetime.timedelta(days=2)
+        )
+        notifications_repo.record_device_result(
+            conn, reconcilable.id, "ExponentPushToken[a]", "sent", expo_ticket_id="ticket-new"
+        )
+
+        results = notifications_repo.list_devices_awaiting_reconciliation(
+            conn, before=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=1)
+        )
+
+        assert {r.notification_log_id for r in results} == {reconcilable.id}
+        assert pending_notification.id not in {r.notification_log_id for r in results}
+
+    def test_list_devices_awaiting_reconciliation_excludes_rows_sent_too_recently(
+        self, conn, make_user
+    ):
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+        notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[a]", "sent", expo_ticket_id="ticket-fresh"
+        )
+
+        results = notifications_repo.list_devices_awaiting_reconciliation(
+            conn, before=datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=25)
+        )
+
+        assert results == []
+
+    def test_sync_notification_status_from_devices_needs_every_device_failed_to_mark_failed(
+        self, conn, make_user
+    ):
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+        notifications_repo.mark_status(conn, notification.id, "sent")
+        device_a = notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[a]", "sent", expo_ticket_id="ticket-a"
+        )
+        notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[b]", "failed", error="boom"
+        )
+        notifications_repo.mark_device_status(conn, device_a.id, "failed")
+
+        synced = notifications_repo.sync_notification_status_from_devices(conn, notification.id)
+
+        assert synced.status == "failed"
+
+    def test_sync_notification_status_from_devices_marks_delivered_if_any_device_delivered(
+        self, conn, make_user
+    ):
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+        notifications_repo.mark_status(conn, notification.id, "sent")
+        notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[a]", "failed", error="boom"
+        )
+        device_b = notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[b]", "sent", expo_ticket_id="ticket-b"
+        )
+        notifications_repo.mark_device_status(conn, device_b.id, "delivered")
+
+        synced = notifications_repo.sync_notification_status_from_devices(conn, notification.id)
+
+        assert synced.status == "delivered"
+        assert synced.delivered_at is not None
+
+    def test_sync_notification_status_from_devices_leaves_status_alone_while_any_still_sent(
+        self, conn, make_user
+    ):
+        user_id = make_user()
+        notification = notifications_repo.upsert_pending(
+            conn, user_id, "daily_reminder", datetime.date(2026, 8, 24)
+        )
+        notifications_repo.mark_status(conn, notification.id, "sent")
+        notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[a]", "failed", error="boom"
+        )
+        notifications_repo.record_device_result(
+            conn, notification.id, "ExponentPushToken[b]", "sent", expo_ticket_id="ticket-b"
+        )
+
+        synced = notifications_repo.sync_notification_status_from_devices(conn, notification.id)
+
+        assert synced.status == "sent"
 
 
 class TestPushTokensRepository:

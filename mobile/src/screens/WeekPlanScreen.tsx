@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { BottomSheet } from '../components/BottomSheet';
@@ -8,6 +10,7 @@ import { Shimmer } from '../components/Shimmer';
 import { useSession } from '../contexts/SessionContext';
 import { supabase } from '../lib/supabase';
 import { type CachedPayload, loadCache, saveCache } from '../lib/weekCache';
+import type { PlanStackParamList } from '../navigation/types';
 import { colors, fonts, radii, spacing } from '../theme/tokens';
 import {
   CHRONOLOGICAL_SLOTS,
@@ -24,16 +27,27 @@ import {
 // (0006_rls_policies.sql) — no mocked/local data — plus the pending ("still cooking") and offline
 // (cached-copy) states the design calls out as real product states, not just the happy path.
 //
-// Swap/skip/regenerate are visually present (tapping a slot or "New ideas" opens the right sheet)
-// but inert this round: there's no dish catalog yet (MP-015-020 blocked) and no generation engine
-// (MP-034/038-044 blocked), so there is nothing real to offer. Each sheet says so plainly instead
-// of pretending to work.
+// Skip and item-level swap (MP-058/059) are real. Whole-day "New ideas" regenerate is still
+// inert — that's MP-046's regenerate-remaining-week path, out of this phase's scope — its sheet
+// says so plainly rather than pretending to work. A single-item slot (morning/night — see
+// slot_templates.py) swaps in place here for a near-instant, no-navigation feel (MP-059's own AC);
+// a multi-item slot (afternoon, or a slot a user has added items to) hands off to
+// DayReviewEditScreen, where each item gets its own swap/add/remove.
 type PlanItemRow = {
   id: string;
   item_type: string;
   status: 'filled' | 'needs_manual_pick';
   make_extra: boolean;
+  dish_id: string | null;
   dishes: { name: string } | null;
+};
+
+type SwapCandidate = {
+  dish_id: string;
+  name: string;
+  used_this_week: boolean;
+  used_recently: boolean;
+  exceeds_nonveg_quota: boolean;
 };
 
 type MealPlanRow = {
@@ -88,7 +102,8 @@ async function fetchRollingWindow(days: RollingDay[]): Promise<MealPlanRow[]> {
   const { data, error } = await supabase
     .from('meal_plans')
     .select(
-      'id, plan_date, slot, is_skipped, plan_items(id, item_type, status, make_extra, dishes(name))',
+      'id, plan_date, slot, is_skipped, ' +
+        'plan_items(id, item_type, status, make_extra, dish_id, dishes(name))',
     )
     .gte('plan_date', days[0].iso)
     .lte('plan_date', days[days.length - 1].iso);
@@ -100,12 +115,15 @@ async function fetchRollingWindow(days: RollingDay[]): Promise<MealPlanRow[]> {
 }
 
 export function WeekPlanScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<PlanStackParamList, 'WeekPlan'>>();
   const { session } = useSession();
   const userId = session?.user.id ?? null;
   const days = useMemo(() => rollingDays(new Date()), []);
   const [view, setView] = useState<ViewState>({ kind: 'loading' });
   const [slotSheet, setSlotSheet] = useState<{ day: RollingDay; slot: Slot } | null>(null);
   const [infoSheetOpen, setInfoSheetOpen] = useState(false);
+  const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[] | null>(null);
+  const [dismissedQuickSwapIds, setDismissedQuickSwapIds] = useState<Set<string>>(new Set());
 
   const load = async () => {
     setView({ kind: 'loading' });
@@ -125,16 +143,20 @@ export function WeekPlanScreen() {
     }
   };
 
-  useEffect(() => {
-    // `load` is deliberately shared between the initial mount fetch and the offline view's "Try
-    // again" button — same request, two triggers — which is what react-hooks/set-state-in-effect
-    // flags here.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
-    // `load` is intentionally omitted: it's stable in practice (only closes over `days` and
-    // `userId`, and including it would refetch on every render).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  // PR review fix: this screen stays mounted underneath DayReviewEditScreen's native-stack route
+  // (React Navigation doesn't unmount the screen below), so a plain mount-only effect never saw a
+  // swap/add/remove/carry-over made there — both the in-memory view and the persisted offline
+  // cache (weekCache) kept showing the pre-edit plan until something else happened to remount
+  // this screen. useFocusEffect refetches every time this screen becomes the visible one again,
+  // including the initial mount (its own first focus) and returning from that edit screen.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+      // `load` is intentionally omitted: it's stable in practice (only closes over `days` and
+      // `userId`, and including it would refetch on every render).
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [userId]),
+  );
 
   // MP-061: skip/eating-out toggle. 0012_meal_plans_skip_toggle_rls.sql grants the owning user a
   // direct write to this one column, matching the rest of this app's "every edit autosaves and is
@@ -157,6 +179,65 @@ export function WeekPlanScreen() {
       .eq('id', planId);
     if (error) {
       // Revert the optimistic update — the write didn't actually take.
+      setView({ kind: 'ready', plans: previousPlans });
+      await saveCache(CACHE_KEY, userId, previousPlans);
+    }
+  };
+
+  // MP-059: no-LLM quick single-slot swap. Only offered here for a slot with exactly one item
+  // (morning/night per slot_templates.py) — a multi-item slot (afternoon, or one a user has added
+  // to) needs per-item choice, which is DayReviewEditScreen's job, not a one-tap sheet's.
+  const singleItem =
+    slotSheet && view.kind === 'ready'
+      ? (byPlansMap(view.plans).get(slotKey(slotSheet.day.iso, slotSheet.slot))?.plan_items ?? [])
+      : [];
+  const soleSwapTarget = singleItem.length === 1 ? singleItem[0] : null;
+
+  useEffect(() => {
+    if (!soleSwapTarget) {
+      // Resets to loading-state for the sheet's next open, not a value derived from an external
+      // system.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSwapCandidates(null);
+      setDismissedQuickSwapIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .rpc('list_swap_candidates', { target_plan_item_id: soleSwapTarget.id })
+      .then(({ data }) => {
+        if (!cancelled) {
+          setSwapCandidates((data ?? []) as SwapCandidate[]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleSwapTarget?.id]);
+
+  const quickSwap = async (planItemId: string, dishId: string, dishName: string) => {
+    if (view.kind !== 'ready' || !userId) {
+      return;
+    }
+    const previousPlans = view.plans;
+    const nextPlans = previousPlans.map((row) => ({
+      ...row,
+      plan_items: row.plan_items.map((item) =>
+        item.id === planItemId
+          ? { ...item, dish_id: dishId, status: 'filled' as const, dishes: { name: dishName } }
+          : item,
+      ),
+    }));
+    setView({ kind: 'ready', plans: nextPlans });
+    await saveCache(CACHE_KEY, userId, nextPlans);
+    setSlotSheet(null);
+
+    const { error } = await supabase.rpc('swap_plan_item', {
+      target_plan_item_id: planItemId,
+      new_dish_id: dishId,
+    });
+    if (error) {
       setView({ kind: 'ready', plans: previousPlans });
       await saveCache(CACHE_KEY, userId, previousPlans);
     }
@@ -233,8 +314,22 @@ export function WeekPlanScreen() {
         row={
           slotSheet ? (plansByKey.get(slotKey(slotSheet.day.iso, slotSheet.slot)) ?? null) : null
         }
+        soleSwapTarget={soleSwapTarget}
+        swapCandidates={swapCandidates}
+        dismissedQuickSwapIds={dismissedQuickSwapIds}
+        onDismissQuickSwapBadges={(dishId) =>
+          setDismissedQuickSwapIds((current) => new Set(current).add(dishId))
+        }
         onClose={() => setSlotSheet(null)}
         onToggleSkip={toggleSkip}
+        onQuickSwap={quickSwap}
+        onReviewDay={() => {
+          if (!slotSheet) {
+            return;
+          }
+          setSlotSheet(null);
+          navigation.navigate('DayReviewEdit', { planDate: slotSheet.day.iso });
+        }}
       />
       <InfoSheet visible={infoSheetOpen} onClose={() => setInfoSheetOpen(false)} />
     </View>
@@ -417,18 +512,31 @@ function RestOfWeekRow({
 function SlotDetailSheet({
   target,
   row,
+  soleSwapTarget,
+  swapCandidates,
+  dismissedQuickSwapIds,
+  onDismissQuickSwapBadges,
   onClose,
   onToggleSkip,
+  onQuickSwap,
+  onReviewDay,
 }: {
   target: { day: RollingDay; slot: Slot } | null;
   row: MealPlanRow | null;
+  soleSwapTarget: PlanItemRow | null;
+  swapCandidates: SwapCandidate[] | null;
+  dismissedQuickSwapIds: Set<string>;
+  onDismissQuickSwapBadges: (dishId: string) => void;
   onClose: () => void;
   onToggleSkip: (planId: string, nextSkipped: boolean) => void;
+  onQuickSwap: (planItemId: string, dishId: string, dishName: string) => void;
+  onReviewDay: () => void;
 }) {
   const visible = !!target;
   const meta = target ? SLOT_META[target.slot] : null;
   const line = row ? composeLine(row.plan_items) : null;
   const skipped = row?.is_skipped ?? false;
+  const isMultiItem = (row?.plan_items.length ?? 0) > 1;
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
@@ -440,11 +548,12 @@ function SlotDetailSheet({
           <Text style={styles.sheetTitle}>
             {skipped ? 'Cooking something of your own' : (line ?? 'Nothing planned yet')}
           </Text>
-          <Text style={styles.sheetNote}>
-            {skipped
-              ? "Marked as your own for today — doesn't count toward the grocery list."
-              : 'Swapping opens up once the dish list is ready.'}
-          </Text>
+          {!skipped && isMultiItem && (
+            <Text style={styles.sheetNote}>
+              This slot has more than one item — swap, add, or remove any of them from the full day
+              view.
+            </Text>
+          )}
           {row && (
             // MP-061: no confirmation dialog, no warning color either direction — same tap-and-
             // done friction as accepting a suggestion (Phase 4 brief §1).
@@ -457,6 +566,68 @@ function SlotDetailSheet({
               <Text style={styles.sheetSecondaryButtonLabel}>
                 {skipped ? 'Actually, cooking this' : 'Cooking something else'}
               </Text>
+            </TouchableOpacity>
+          )}
+          {!skipped && soleSwapTarget && (
+            <View testID="quick-swap-list" style={{ marginBottom: spacing.md }}>
+              <Text style={styles.sectionLabel}>Swap for</Text>
+              {swapCandidates === null && <Text style={styles.sheetNote}>Loading options…</Text>}
+              {swapCandidates?.length === 0 && (
+                <Text style={styles.sheetNote}>
+                  No other options fit your dietary restrictions.
+                </Text>
+              )}
+              {swapCandidates
+                ?.filter((candidate) => candidate.dish_id !== soleSwapTarget.dish_id)
+                .map((candidate) => {
+                  // MP-062: dismissible advisory only — never disables the row or blocks the tap,
+                  // same contract as DayReviewEditScreen's AdvisoryBadges.
+                  const hasAdvisory =
+                    candidate.used_this_week ||
+                    candidate.used_recently ||
+                    candidate.exceeds_nonveg_quota;
+                  const showBadges = hasAdvisory && !dismissedQuickSwapIds.has(candidate.dish_id);
+                  return (
+                    <TouchableOpacity
+                      key={candidate.dish_id}
+                      style={styles.quickSwapRow}
+                      onPress={() =>
+                        onQuickSwap(soleSwapTarget.id, candidate.dish_id, candidate.name)
+                      }
+                      testID={`quick-swap-${candidate.dish_id}`}
+                    >
+                      <Text style={styles.quickSwapName}>{candidate.name}</Text>
+                      {showBadges && (
+                        <View style={styles.quickSwapBadgeRow}>
+                          <Text style={styles.quickSwapBadge}>
+                            {candidate.used_this_week
+                              ? 'Used this week'
+                              : candidate.used_recently
+                                ? 'Used recently'
+                                : 'Over non-veg quota'}
+                          </Text>
+                          <TouchableOpacity
+                            onPress={() => onDismissQuickSwapBadges(candidate.dish_id)}
+                            hitSlop={8}
+                            testID={`dismiss-quick-swap-badge-${candidate.dish_id}`}
+                          >
+                            <Text style={styles.quickSwapBadgeDismiss}>×</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+            </View>
+          )}
+          {!skipped && row && (
+            <TouchableOpacity
+              style={styles.sheetSecondaryButton}
+              onPress={onReviewDay}
+              testID="review-day-button"
+              accessibilityRole="button"
+            >
+              <Text style={styles.sheetSecondaryButtonLabel}>Review & edit the whole day</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity style={styles.sheetPrimaryButton} onPress={onClose}>
@@ -847,6 +1018,34 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bodyRegular,
     fontSize: 14,
     color: colors.leaf,
+  },
+  quickSwapRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  quickSwapName: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  quickSwapBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  quickSwapBadge: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: 11,
+    color: colors.textMuted,
+  },
+  quickSwapBadgeDismiss: {
+    fontFamily: fonts.bodyRegular,
+    fontSize: 13,
+    color: colors.textMuted,
   },
   sheetOutlineButton: {
     flex: 1,
