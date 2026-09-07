@@ -70,7 +70,7 @@ describe('RootNavigator state boundary', () => {
 
     const tree = renderRoot();
 
-    expect(textOf(tree)).toContain("Let's set up your plan");
+    expect(textOf(tree)).toContain('What type of food do you eat?');
   });
 
   it('shows the main tabs once signed in with a completed profile', () => {

@@ -11,10 +11,21 @@ export type AuthStackParamList = {
   PhonePreview: undefined;
 };
 
+// Phase 8 (MP-024): the 7-question onboarding flow, per the Phase 8 build brief — not the
+// original 8-question functional spec, which this brief supersedes for onboarding purposes.
+// Q2 (MeatTypes)/Q3 (NonvegDays) only exist on the Non-vegetarian branch; Q4 (EggFrequency) only
+// on the Eggetarian/Non-vegetarian branches. Each screen navigates to the next route by name at
+// Continue time (see e.g. DietTypeScreen), so a branch that shouldn't be reachable genuinely
+// isn't — not just hidden by styling.
 export type OnboardingStackParamList = {
-  // Single placeholder step — MP-024 (the 8-question flow) defines the real steps; this stack
-  // exists so onboarding has a route today without hardcoding its internals ahead of that spec.
-  OnboardingStart: undefined;
+  DietType: undefined;
+  MeatTypes: undefined;
+  NonvegDays: undefined;
+  EggFrequency: undefined;
+  Allergies: undefined;
+  PlanningMode: undefined;
+  GroceryDay: undefined;
+  Review: undefined;
 };
 
 export type PlanStackParamList = {
