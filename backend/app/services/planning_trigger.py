@@ -54,3 +54,23 @@ def compute_trigger(
         should_trigger=should_trigger,
         grocery_day_date=candidate_grocery_day_date if should_trigger else None,
     )
+
+
+def compute_first_plan_start(
+    today: datetime.date, grocery_day: str, planning_mode: str
+) -> datetime.date:
+    """Phase 8 (MP-026): the next date (today included) on which the normal 8 PM sweep would
+    trigger generation for this profile — the same day-before/day-after-grocery_day rule
+    compute_trigger already encodes above, rolled forward to its nearest occurrence from today.
+    Reuses compute_trigger rather than duplicating its day-index arithmetic.
+
+    Equals today when onboarding happens to land exactly on the trigger day; otherwise a concrete
+    date up to 6 days out (the mid-week-signup case this function exists to handle correctly). This
+    only computes a date to display — it does not itself trigger an immediate generation call; the
+    normal scheduled sweep still does that once the returned date arrives.
+    """
+    for offset in range(7):
+        candidate = today + datetime.timedelta(days=offset)
+        if compute_trigger(candidate, grocery_day, planning_mode).should_trigger:
+            return candidate
+    raise AssertionError("unreachable: the trigger day recurs at least once every 7 days")

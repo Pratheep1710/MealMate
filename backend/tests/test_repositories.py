@@ -66,6 +66,11 @@ class TestProfilesRepository:
             planning_mode="reserves",
             grocery_day="sunday",
             timezone="Asia/Kolkata",
+            diet_type="nonvegetarian",
+            meat_types=[],
+            egg_frequency="any",
+            egg_day_pattern=[],
+            allergy_other_text=None,
         )
         profiles_repo.upsert_profile(conn, profile)
 
@@ -232,6 +237,11 @@ class TestProfilesRepository:
             planning_mode="suggestion",
             grocery_day="monday",
             timezone="Asia/Kolkata",
+            diet_type="vegetarian",
+            meat_types=[],
+            egg_frequency=None,
+            egg_day_pattern=[],
+            allergy_other_text=None,
         )
         profiles_repo.upsert_profile(conn, onboarding_profile)
 
@@ -285,6 +295,11 @@ class TestCatalogRepository:
             planning_mode="suggestion",
             grocery_day="monday",
             timezone="Asia/Kolkata",
+            diet_type="vegetarian",
+            meat_types=[],
+            egg_frequency=None,
+            egg_day_pattern=[],
+            allergy_other_text=None,
         )
         profiles_repo.upsert_profile(conn, profile)
         fetched = profiles_repo.get_profile(conn, user_id)
@@ -340,6 +355,11 @@ class TestHistoryRepository:
                 planning_mode="suggestion",
                 grocery_day="monday",
                 timezone="Asia/Kolkata",
+                diet_type="vegetarian",
+                meat_types=[],
+                egg_frequency=None,
+                egg_day_pattern=[],
+                allergy_other_text=None,
             ),
         )
         variety_dish = _insert_dish(conn, name="Variety Dish", track_variety=True)

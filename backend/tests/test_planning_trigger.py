@@ -11,13 +11,14 @@ import datetime
 
 import pytest
 
-from app.services.planning_trigger import compute_trigger
+from app.services.planning_trigger import compute_first_plan_start, compute_trigger
 
 _SUNDAY = datetime.date(2026, 8, 23)
 _MONDAY = datetime.date(2026, 8, 24)
 _TUESDAY = datetime.date(2026, 8, 25)
 _WEDNESDAY = datetime.date(2026, 8, 26)
 _THURSDAY = datetime.date(2026, 8, 27)
+_FRIDAY = datetime.date(2026, 8, 28)
 
 
 @pytest.mark.parametrize(
@@ -70,3 +71,49 @@ def test_unknown_planning_mode_raises() -> None:
 def test_unknown_day_name_raises() -> None:
     with pytest.raises(ValueError, match="day name"):
         compute_trigger(_MONDAY, "funday", "reserves")
+
+
+# Phase 8 (MP-026): compute_first_plan_start — pure unit tests, no DB needed.
+
+
+def test_signing_up_exactly_on_the_trigger_day_returns_today() -> None:
+    # Suggestion triggers grocery_day - 1: signing up on Friday with grocery_day=Saturday means
+    # today already *is* the trigger day.
+    assert compute_first_plan_start(_FRIDAY, "saturday", "suggestion") == _FRIDAY
+
+
+def test_mid_week_signup_in_suggestion_mode_returns_the_upcoming_trigger_day() -> None:
+    # This is the scenario MP-026 exists to handle correctly: a Tuesday signup with a Saturday
+    # grocery_day doesn't return "today" — it returns the concrete upcoming Friday (grocery_day -
+    # 1), several days out, not immediate.
+    assert compute_first_plan_start(_TUESDAY, "saturday", "suggestion") == _FRIDAY
+
+
+def test_mid_week_signup_in_reserves_mode_returns_the_upcoming_trigger_day() -> None:
+    # Reserves triggers grocery_day + 1: same Tuesday signup, Saturday grocery_day. The Sunday
+    # right after this Saturday (Aug 23) already passed relative to this Tuesday (Aug 25), so the
+    # next occurrence is a full week out — Aug 30, not Aug 23.
+    expected = _SUNDAY + datetime.timedelta(days=7)
+    assert compute_first_plan_start(_TUESDAY, "saturday", "reserves") == expected
+
+
+def test_first_plan_start_wraps_correctly_across_a_week_boundary() -> None:
+    # grocery_day=Monday, Suggestion triggers the day before (Sunday) — starting from a Monday
+    # itself must roll all the way to the *next* Sunday, not "yesterday".
+    expected = _SUNDAY + datetime.timedelta(days=7)
+    assert compute_first_plan_start(_MONDAY, "monday", "suggestion") == expected
+
+
+def test_first_plan_start_never_looks_more_than_six_days_out() -> None:
+    for planning_mode in ("suggestion", "reserves"):
+        for grocery_day in (
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        ):
+            result = compute_first_plan_start(_WEDNESDAY, grocery_day, planning_mode)
+            assert _WEDNESDAY <= result <= _WEDNESDAY + datetime.timedelta(days=6)

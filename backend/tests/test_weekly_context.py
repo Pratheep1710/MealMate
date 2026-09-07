@@ -28,6 +28,11 @@ def _profile(
         planning_mode="suggestion",
         grocery_day="monday",
         timezone="Asia/Kolkata",
+        diet_type="nonvegetarian",
+        meat_types=[],
+        egg_frequency="any",
+        egg_day_pattern=[],
+        allergy_other_text=None,
     )
 
 
@@ -45,7 +50,7 @@ def test_pattern_pins_named_days_nonveg_and_the_rest_veg_only() -> None:
     profile = _profile(nonveg_days_per_week=2, nonveg_day_pattern=["wednesday", "saturday"])
     context = compute_weekly_context(profile, _WEEK_START)
 
-    by_name = {day.day_name: day.nonveg_constraint for day in context.days}
+    by_name = {day.day_name: day.meat_constraint for day in context.days}
     assert by_name["wednesday"] == "required"
     assert by_name["saturday"] == "required"
     for name in ("monday", "tuesday", "thursday", "friday", "sunday"):
@@ -61,7 +66,7 @@ def test_pattern_in_the_persisted_abbreviated_form_still_pins_the_right_days() -
     profile = _profile(nonveg_days_per_week=2, nonveg_day_pattern=["wed", "sat"])
     context = compute_weekly_context(profile, _WEEK_START)
 
-    by_name = {day.day_name: day.nonveg_constraint for day in context.days}
+    by_name = {day.day_name: day.meat_constraint for day in context.days}
     assert by_name["wednesday"] == "required"
     assert by_name["saturday"] == "required"
     for name in ("monday", "tuesday", "thursday", "friday", "sunday"):
@@ -71,7 +76,7 @@ def test_pattern_in_the_persisted_abbreviated_form_still_pins_the_right_days() -
 def test_pattern_normalization_is_case_insensitive() -> None:
     profile = _profile(nonveg_days_per_week=1, nonveg_day_pattern=["WED"])
     context = compute_weekly_context(profile, _WEEK_START)
-    by_name = {day.day_name: day.nonveg_constraint for day in context.days}
+    by_name = {day.day_name: day.meat_constraint for day in context.days}
     assert by_name["wednesday"] == "required"
 
 
@@ -90,14 +95,14 @@ def test_the_required_day_count_always_matches_nonveg_days_per_week_when_a_patte
     profile = _profile(nonveg_days_per_week=2, nonveg_day_pattern=["wed", "sat"])
     context = compute_weekly_context(profile, _WEEK_START)
 
-    required_count = sum(1 for day in context.days if day.nonveg_constraint == "required")
+    required_count = sum(1 for day in context.days if day.meat_constraint == "required")
     assert required_count == context.nonveg_days_per_week
 
 
 def test_no_pattern_leaves_every_day_flexible() -> None:
     profile = _profile(nonveg_days_per_week=2, nonveg_day_pattern=None)
     context = compute_weekly_context(profile, _WEEK_START)
-    assert all(day.nonveg_constraint == "flexible" for day in context.days)
+    assert all(day.meat_constraint == "flexible" for day in context.days)
     assert context.nonveg_days_per_week == 2
 
 

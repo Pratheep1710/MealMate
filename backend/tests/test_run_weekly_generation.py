@@ -27,6 +27,11 @@ def _profile(*, planning_mode: str = "reserves", grocery_day: str = "monday") ->
         planning_mode=planning_mode,
         grocery_day=grocery_day,
         timezone="Asia/Kolkata",
+        diet_type="nonvegetarian",
+        meat_types=[],
+        egg_frequency="any",
+        egg_day_pattern=[],
+        allergy_other_text=None,
     )
 
 

@@ -453,7 +453,13 @@ describe('swap_plan_item — RLS-scoped RPC (MP-058/059)', () => {
       unavailable.rows[0].id,
       ingredient.rows[0].id,
     ]);
-    await db.query(`update user_profiles set planning_mode = 'reserves' where id = $1`, [USER_A]);
+    // diet_type must allow this nonveg dish so the Reserves-availability check below is what
+    // actually fires — otherwise the new (Phase 8) dish_matches_diet_type gate rejects it first,
+    // since the column default is diet_type='vegetarian' (0021_onboarding_diet_taxonomy.sql).
+    await db.query(
+      `update user_profiles set planning_mode = 'reserves', diet_type = 'nonvegetarian', egg_frequency = 'any' where id = $1`,
+      [USER_A]
+    );
     await reset(db);
 
     await asUser(db, USER_A);

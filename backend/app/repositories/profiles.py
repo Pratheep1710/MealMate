@@ -11,7 +11,8 @@ from app.models import UserProfile
 
 _COLUMNS = (
     "id, nonveg_days_per_week, nonveg_day_pattern, dietary_restrictions, "
-    "dinner_style, planning_mode, grocery_day, timezone"
+    "dinner_style, planning_mode, grocery_day, timezone, "
+    "diet_type, meat_types, egg_frequency, egg_day_pattern, allergy_other_text"
 )
 
 # MP-063: must match supabase/migrations/0018_favorites_cap.sql's `favorites_cap` constant — that
@@ -52,15 +53,21 @@ def upsert_profile(conn: psycopg.Connection[DictRow], profile: UserProfile) -> U
         f"""
         insert into user_profiles
             (id, nonveg_days_per_week, nonveg_day_pattern, dietary_restrictions,
-             dinner_style, planning_mode, grocery_day, timezone)
-        values (%s, %s, %s, %s, %s, %s, %s, %s)
+             dinner_style, planning_mode, grocery_day, timezone,
+             diet_type, meat_types, egg_frequency, egg_day_pattern, allergy_other_text)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (id) do update set
             nonveg_days_per_week = excluded.nonveg_days_per_week,
             nonveg_day_pattern = excluded.nonveg_day_pattern,
             dietary_restrictions = excluded.dietary_restrictions,
             dinner_style = excluded.dinner_style,
             grocery_day = excluded.grocery_day,
-            timezone = excluded.timezone
+            timezone = excluded.timezone,
+            diet_type = excluded.diet_type,
+            meat_types = excluded.meat_types,
+            egg_frequency = excluded.egg_frequency,
+            egg_day_pattern = excluded.egg_day_pattern,
+            allergy_other_text = excluded.allergy_other_text
         returning {_COLUMNS}
         """,
         (
@@ -72,6 +79,11 @@ def upsert_profile(conn: psycopg.Connection[DictRow], profile: UserProfile) -> U
             profile.planning_mode,
             profile.grocery_day,
             profile.timezone,
+            profile.diet_type,
+            profile.meat_types,
+            profile.egg_frequency,
+            profile.egg_day_pattern,
+            profile.allergy_other_text,
         ),
     ).fetchone()
     assert row is not None
