@@ -18,6 +18,7 @@ import psycopg
 from psycopg.rows import DictRow
 
 from app.models import Dish, UserProfile
+from app.models.day_names import normalize_day_name as _normalize_day_name
 from app.repositories import availability as availability_repo
 from app.repositories import catalog as catalog_repo
 from app.repositories import history as history_repo
@@ -47,7 +48,8 @@ class GenerationContext:
     eligible_dish_ids: frozenset[uuid.UUID]
     available_ingredient_ids: frozenset[uuid.UUID]
     last_used_by_dish_id: Mapping[uuid.UUID, datetime.date]
-    nonveg_target_dates: frozenset[datetime.date]
+    meat_target_dates: frozenset[datetime.date]
+    egg_permitted_dates: frozenset[datetime.date]
 
     @property
     def target_dates(self) -> tuple[datetime.date, ...]:
@@ -152,15 +154,30 @@ def build_generation_context(
 
     target_dates = tuple(day.date for day in target_days)
     if profile.nonveg_day_pattern:
-        nonveg_target_dates = frozenset(
-            day.date for day in target_days if day.nonveg_constraint == "required"
+        meat_target_dates = frozenset(
+            day.date for day in target_days if day.meat_constraint == "required"
         )
     else:
         earlier_nonveg_dates = history_repo.get_nonveg_plan_dates(
             conn, user_id, week_start, effective_start
         )
         remaining_quota = max(0, week.nonveg_days_per_week - len(earlier_nonveg_dates))
-        nonveg_target_dates = _evenly_spaced_dates(target_dates, remaining_quota)
+        meat_target_dates = _evenly_spaced_dates(target_dates, remaining_quota)
+
+    # Phase 8 (MP-024 Q4): an *allowed* set, not a required quota — "how often can we include
+    # eggs" is permission, not a mandate, unlike meat_target_dates' exact-match quota above.
+    if profile.diet_type == "vegetarian" or profile.egg_frequency in (None, "never"):
+        egg_permitted_dates: frozenset[datetime.date] = frozenset()
+    elif profile.egg_frequency == "any":
+        egg_permitted_dates = frozenset(target_dates)
+    elif profile.egg_frequency == "nonveg_days":
+        # Eggetarian profiles never have a meat quota (DB-constrained to 0/empty), so this is
+        # always empty for that branch — documented onboarding quirk, not a bug: "only non-veg
+        # days" has no referent without a meat quota to anchor to.
+        egg_permitted_dates = meat_target_dates
+    else:  # "specific"
+        egg_days = {_normalize_day_name(day) for day in profile.egg_day_pattern}
+        egg_permitted_dates = frozenset(day.date for day in target_days if day.day_name in egg_days)
 
     return GenerationContext(
         profile=profile,
@@ -173,5 +190,6 @@ def build_generation_context(
         eligible_dish_ids=eligible_dish_ids,
         available_ingredient_ids=available_ingredient_ids,
         last_used_by_dish_id=last_used_by_dish_id,
-        nonveg_target_dates=nonveg_target_dates,
+        meat_target_dates=meat_target_dates,
+        egg_permitted_dates=egg_permitted_dates,
     )

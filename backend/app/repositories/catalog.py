@@ -12,7 +12,8 @@ from psycopg.rows import DictRow
 from app.models import Dish, Ingredient
 
 _DISH_COLUMNS = (
-    "id, name, item_type, veg_or_nonveg, region_style, prep_minutes, track_variety, dietary_flags"
+    "id, name, item_type, veg_or_nonveg, region_style, prep_minutes, track_variety, dietary_flags, "
+    "meat_type"
 )
 
 

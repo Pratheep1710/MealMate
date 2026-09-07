@@ -1,16 +1,19 @@
-"""MP-036: per-day weekly generation context — non-veg constraints, actual target dates, and
+"""MP-036: per-day weekly generation context — meat constraints, actual target dates, and
 prep-bias labels (docs/MP-001 "Time-budget tagging (prep-time bias, weekday vs. weekend) — filter
 on existing data, no new functionality", plus user_profiles.nonveg_days_per_week /
 nonveg_day_pattern). Feeds MP-034's candidate filtering (blocked on the catalog) with a
 deterministic, date-only computation — no catalog or LLM involvement here.
 
-Non-veg constraint rule: when nonveg_day_pattern is set (e.g. {wed, sat} — 0002_user_profile_
-favorites_schema.sql's own example uses the abbreviated form, and that's what's actually
-persisted), those named days are 'required' non-veg and every other day is 'veg_only' — the
-pattern is precise, so days outside it are pinned veg by the same logic that pinned the named days
-non-veg. When no pattern is set, nonveg_days_per_week is a count-only constraint (some N days
+Meat constraint rule (Phase 8: renamed from "non-veg" to disambiguate from egg placement, which is
+also veg_or_nonveg='nonveg' but governed independently by profile.egg_frequency — see
+generation_context.py's egg_permitted_dates): when nonveg_day_pattern is set (e.g. {wed, sat} —
+0002_user_profile_favorites_schema.sql's own example uses the abbreviated form, and that's what's
+actually persisted), those named days are 'required' meat days and every other day is 'veg_only' —
+the pattern is precise, so days outside it are pinned veg by the same logic that pinned the named
+days to meat. When no pattern is set, nonveg_days_per_week is a count-only constraint (some N days
 somewhere in the week), so every day stays 'flexible' here; Phase 6's generation context resolves
-the remaining quota into deterministic evenly-spaced target dates.
+the remaining quota into deterministic evenly-spaced target dates. Both fields are DB-constrained
+to be inert (0/empty) unless profile.diet_type == 'nonvegetarian' (0021_onboarding_diet_taxonomy.sql).
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from app.models.day_names import normalize_day_name as _normalize_day_name
 
 _WEEKEND_WEEKDAYS = (5, 6)  # Saturday, Sunday, per datetime.date.weekday()
 
-NonvegConstraint = Literal["required", "veg_only", "flexible"]
+MeatConstraint = Literal["required", "veg_only", "flexible"]
 PrepBias = Literal["quick", "flexible"]
 
 
@@ -33,7 +36,7 @@ PrepBias = Literal["quick", "flexible"]
 class DayContext:
     date: datetime.date
     day_name: str
-    nonveg_constraint: NonvegConstraint
+    meat_constraint: MeatConstraint
     prep_bias: PrepBias
 
 
@@ -62,16 +65,16 @@ def compute_weekly_context(profile: UserProfile, week_start: datetime.date) -> W
 
 def _day_context(date: datetime.date, pattern: set[str]) -> DayContext:
     day_name = _DAY_NAMES[date.weekday()]
-    nonveg_constraint: NonvegConstraint
+    meat_constraint: MeatConstraint
     if not pattern:
-        nonveg_constraint = "flexible"
+        meat_constraint = "flexible"
     elif day_name in pattern:
-        nonveg_constraint = "required"
+        meat_constraint = "required"
     else:
-        nonveg_constraint = "veg_only"
+        meat_constraint = "veg_only"
 
     prep_bias: PrepBias = "flexible" if date.weekday() in _WEEKEND_WEEKDAYS else "quick"
 
     return DayContext(
-        date=date, day_name=day_name, nonveg_constraint=nonveg_constraint, prep_bias=prep_bias
+        date=date, day_name=day_name, meat_constraint=meat_constraint, prep_bias=prep_bias
     )

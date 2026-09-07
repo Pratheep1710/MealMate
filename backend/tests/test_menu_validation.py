@@ -165,4 +165,28 @@ def test_restricted_user_can_receive_a_dish_with_disjoint_valid_flags() -> None:
 
 def test_nonveg_dates_must_match_the_profile_target() -> None:
     context = make_context()
-    assert "nonveg_quota" in _codes(menu_for_context(context, include_nonveg=False), context)
+    assert "meat_quota" in _codes(menu_for_context(context, include_nonveg=False), context)
+
+
+def test_egg_dish_outside_egg_permitted_dates_is_rejected() -> None:
+    context = make_context(diet_type="eggetarian", egg_frequency="specific", egg_day_pattern=["mon"])
+    # egg_permitted_dates is only Monday for this profile, but make_context's meat_target_dates
+    # fixture (hardcoded to {WEEK_START}, a Monday) is what menu_for_context uses to decide which
+    # date gets the "nonveg" dish — replace the catalog's nonveg dish with an egg dish and place it
+    # on a day outside egg_day_pattern to trigger the rejection.
+    context = replace(context, egg_permitted_dates=frozenset())
+    old = next(d for d in context.catalog[0].dishes if d.veg_or_nonveg == "nonveg")
+    egg_dish = old.model_copy(update={"dietary_flags": ["Egg"], "meat_type": None})
+    context = replace_dish(context, old, egg_dish)
+
+    assert "egg_permission" in _codes(menu_for_context(context), context)
+
+
+def test_egg_dish_inside_egg_permitted_dates_is_accepted() -> None:
+    context = make_context(diet_type="eggetarian", egg_frequency="any")
+    context = replace(context, egg_permitted_dates=frozenset(context.target_dates))
+    old = next(d for d in context.catalog[0].dishes if d.veg_or_nonveg == "nonveg")
+    egg_dish = old.model_copy(update={"dietary_flags": ["Egg"], "meat_type": None})
+    context = replace_dish(context, old, egg_dish)
+
+    assert "egg_permission" not in _codes(menu_for_context(context), context)

@@ -81,4 +81,66 @@ def test_fallback_places_nonveg_on_the_target_date() -> None:
         for item in plan.items
         if item.dish_id is not None and dishes[item.dish_id].veg_or_nonveg == "nonveg"
     }
-    assert nonveg_dates == set(context.nonveg_target_dates)
+    assert nonveg_dates == set(context.meat_target_dates)
+
+
+def test_fallback_never_selects_meat_for_a_vegetarian_profile() -> None:
+    # Vegetarian profiles are DB-constrained to nonveg_days_per_week=0 (0021_onboarding_diet_
+    # taxonomy.sql), but this is the hard gate itself (diet_type_allows), not an emergent property
+    # of the quota — a bug in target-date computation must not be able to leak a Vegetarian a meat
+    # or egg dish.
+    context = make_context(diet_type="vegetarian", egg_frequency=None)
+    plan = build_fallback_plan(context)
+    dishes = context.dishes_by_id
+    assert all(
+        item.dish_id is None or dishes[item.dish_id].veg_or_nonveg == "veg" for item in plan.items
+    )
+
+
+def test_fallback_never_selects_real_meat_for_an_eggetarian_profile() -> None:
+    context = make_context(diet_type="eggetarian", egg_frequency="any")
+    catalog = tuple(
+        replace(
+            group,
+            dishes=tuple(
+                dish.model_copy(update={"dietary_flags": ["Egg"], "meat_type": None})
+                if dish.veg_or_nonveg == "nonveg"
+                else dish
+                for dish in group.dishes
+            ),
+        )
+        for group in context.catalog
+    )
+    context = replace(context, catalog=catalog, eligible_dish_ids=context.candidate_dish_ids)
+    plan = build_fallback_plan(context)
+    dishes = context.dishes_by_id
+    assert all(
+        item.dish_id is None
+        or dishes[item.dish_id].veg_or_nonveg == "veg"
+        or "Egg" in dishes[item.dish_id].dietary_flags
+        for item in plan.items
+    )
+
+
+def test_fallback_respects_a_restricted_meat_types_preference() -> None:
+    context = make_context(diet_type="nonvegetarian", meat_types=["chicken"], egg_frequency="never")
+    catalog = tuple(
+        replace(
+            group,
+            dishes=tuple(
+                dish.model_copy(update={"meat_type": "mutton"})
+                if dish.veg_or_nonveg == "nonveg"
+                else dish
+                for dish in group.dishes
+            ),
+        )
+        for group in context.catalog
+    )
+    context = replace(context, catalog=catalog, eligible_dish_ids=context.candidate_dish_ids)
+    plan = build_fallback_plan(context)
+    dishes = context.dishes_by_id
+    # Every nonveg dish in this catalog is meat_type='mutton', which isn't in meat_types=['chicken']
+    # — none should ever be selected, forcing veg (or needs_manual_pick, never mutton).
+    assert all(
+        item.dish_id is None or dishes[item.dish_id].veg_or_nonveg == "veg" for item in plan.items
+    )

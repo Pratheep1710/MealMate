@@ -48,6 +48,7 @@ def build_generation_prompt(
             "prep_minutes": dish.prep_minutes,
             "track_variety": dish.track_variety,
             "dietary_flags": dish.dietary_flags,
+            "meat_type": dish.meat_type,
         }
         for group in context.catalog
         for dish in group.dishes
@@ -60,8 +61,14 @@ def build_generation_prompt(
             "Never repeat a track_variety dish within this output.",
             "Never use a recent_dish_id.",
             "Never use a dish whose dietary_flags intersect dietary_restrictions.",
-            "A date is non-veg when at least one selected dish is nonveg; "
-            "match nonveg_target_dates exactly.",
+            "A date is a meat date when at least one selected dish is nonveg and does not have "
+            "'Egg' in dietary_flags; match meat_target_dates exactly.",
+            "A dish with 'Egg' in dietary_flags may only be used on a date in egg_permitted_dates.",
+            "If profile.diet_type is 'vegetarian', never select a nonveg dish (meat or egg).",
+            "If profile.diet_type is 'eggetarian', never select a nonveg dish unless it has "
+            "'Egg' in dietary_flags (no real meat, ever).",
+            "If profile.diet_type is 'nonvegetarian' and profile.meat_types is non-empty, a "
+            "non-egg nonveg dish's meat_type must be one of profile.meat_types.",
             "Prefer lower prep_minutes on quick days and broader variety on flexible days.",
             "Only use IDs in eligible_dish_ids.",
         ],
@@ -78,9 +85,13 @@ def build_generation_prompt(
             "dietary_restrictions": context.profile.dietary_restrictions,
             "dinner_style": context.profile.dinner_style,
             "planning_mode": context.profile.planning_mode,
+            "diet_type": context.profile.diet_type,
+            "meat_types": context.profile.meat_types,
+            "egg_frequency": context.profile.egg_frequency,
         },
         "selected_slot_templates": selected_templates,
-        "nonveg_target_dates": sorted(date.isoformat() for date in context.nonveg_target_dates),
+        "meat_target_dates": sorted(date.isoformat() for date in context.meat_target_dates),
+        "egg_permitted_dates": sorted(date.isoformat() for date in context.egg_permitted_dates),
         "recent_dish_ids": sorted(str(dish_id) for dish_id in context.recent_dish_ids),
         "eligible_dish_ids": sorted(str(dish_id) for dish_id in context.eligible_dish_ids),
         "available_ingredient_ids": sorted(

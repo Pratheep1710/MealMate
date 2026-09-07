@@ -61,10 +61,10 @@ def test_night_template_branches_are_explicit_and_dynamic_selection_is_authorita
 
 
 def test_retry_feedback_is_appended_after_the_dynamic_context() -> None:
-    issue = ValidationIssue("nonveg_quota", "wrong non-veg dates")
+    issue = ValidationIssue("meat_quota", "wrong meat dates")
     messages = build_generation_prompt(make_context(), retry_issues=(issue,))
 
     assert [message["role"] for message in messages] == ["developer", "user", "user"]
     feedback = json.loads(messages[-1]["content"])
     assert feedback["retry"] is True
-    assert feedback["issues"] == [{"code": "nonveg_quota", "message": "wrong non-veg dates"}]
+    assert feedback["issues"] == [{"code": "meat_quota", "message": "wrong meat dates"}]

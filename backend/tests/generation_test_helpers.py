@@ -21,6 +21,7 @@ def make_dish(
     dietary_flags: list[str] | None = None,
     name: str | None = None,
     prep_minutes: int | None = 20,
+    meat_type: str | None = None,
 ) -> Dish:
     return Dish(
         id=uuid.uuid4(),
@@ -31,6 +32,7 @@ def make_dish(
         prep_minutes=prep_minutes,
         track_variety=track_variety,
         dietary_flags=dietary_flags or [],
+        meat_type=meat_type,
     )
 
 
@@ -40,16 +42,28 @@ def make_context(
     dinner_style: str = "rice",
     restrictions: list[str] | None = None,
     day_count: int = 2,
+    diet_type: str = "nonvegetarian",
+    meat_types: list[str] | None = None,
+    egg_frequency: str | None = "any",
+    egg_day_pattern: list[str] | None = None,
 ) -> GenerationContext:
     profile = UserProfile(
         id=uuid.uuid4(),
-        nonveg_days_per_week=1,
-        nonveg_day_pattern=["mon"],
+        # Meat-quota fields are DB-constrained to be inert unless diet_type='nonvegetarian'
+        # (0021_onboarding_diet_taxonomy.sql) — mirrored here so callers can pass diet_type
+        # freely without also having to zero these out themselves.
+        nonveg_days_per_week=1 if diet_type == "nonvegetarian" else None,
+        nonveg_day_pattern=["mon"] if diet_type == "nonvegetarian" else None,
         dietary_restrictions=restrictions or [],
         dinner_style=dinner_style,
         planning_mode=planning_mode,
         grocery_day="monday",
         timezone="Asia/Kolkata",
+        diet_type=diet_type,
+        meat_types=meat_types or [],
+        egg_frequency=egg_frequency,
+        egg_day_pattern=egg_day_pattern or [],
+        allergy_other_text=None,
     )
     week = compute_weekly_context(profile, WEEK_START)
     catalog = tuple(
@@ -68,7 +82,8 @@ def make_context(
         eligible_dish_ids=candidate_ids,
         available_ingredient_ids=frozenset(),
         last_used_by_dish_id={},
-        nonveg_target_dates=frozenset({WEEK_START}),
+        meat_target_dates=frozenset({WEEK_START}),
+        egg_permitted_dates=frozenset(),
     )
 
 
@@ -80,7 +95,7 @@ def menu_for_context(context: GenerationContext, *, include_nonveg: bool = True)
     }
     items = []
     for day in context.target_days:
-        nonveg_placed = not (include_nonveg and day.date in context.nonveg_target_dates)
+        nonveg_placed = not (include_nonveg and day.date in context.meat_target_dates)
         for template in context.slot_templates:
             for requirement in template.items:
                 for _ in range(requirement.minimum):

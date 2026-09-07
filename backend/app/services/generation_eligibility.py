@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.models import Dish
+from app.models import Dish, UserProfile
 from app.models.dish import DIETARY_FLAG_VALUES
 
 if TYPE_CHECKING:
@@ -27,6 +27,38 @@ def dietary_conflicts(dish: Dish, restrictions: list[str]) -> frozenset[str]:
     return frozenset() if flags is None else flags & frozenset(restrictions)
 
 
+def is_egg_dish(dish: Dish) -> bool:
+    """Egg dishes are stored as veg_or_nonveg='nonveg' + dietary_flags containing 'Egg' — there is
+    no separate 'eggetarian' category on dishes (dishes.veg_or_nonveg is binary). The ingestion
+    pipeline force-tags every egg-diet dish this way (supabase/seed/catalog_taxonomy.py's
+    belt-and-suspenders note), so this is a reliable signal, not a heuristic.
+    """
+    return dish.veg_or_nonveg == "nonveg" and "Egg" in dish.dietary_flags
+
+
+def diet_type_allows(dish: Dish, profile: UserProfile) -> bool:
+    """Phase 8 (MP-024): hard diet-identity gate — Vegetarian/Eggetarian/meat-type-restricted
+    exclusions never emerge only from target-date quota math, so a bug in that computation can't
+    leak an inappropriate dish through. Day-based egg *permission* (which dates an egg dish is
+    allowed on) is a separate, softer rule — see GenerationContext.egg_permitted_dates and its
+    subset check in menu_validation.py; only the categorical 'never' case is handled here.
+
+    Fail-closed on an unclassified real-meat dish (meat_type is null — the "genuinely ambiguous
+    mixed meat" case 0016's own migration comment calls out) once the user has actually restricted
+    meat_types: matches normalized_dietary_flags' existing fail-closed precedent for malformed
+    metadata. Empty meat_types means unrestricted, matching empty dietary_restrictions.
+    """
+    if dish.veg_or_nonveg == "veg":
+        return True
+    if profile.diet_type == "vegetarian":
+        return False
+    if is_egg_dish(dish):
+        return profile.egg_frequency != "never"
+    if profile.diet_type != "nonvegetarian":
+        return False
+    return not profile.meat_types or dish.meat_type in profile.meat_types
+
+
 def is_eligible(dish: Dish, context: GenerationContext) -> bool:
     """The single hard gate shared by response validation and fallback selection."""
     flags = normalized_dietary_flags(dish)
@@ -34,4 +66,5 @@ def is_eligible(dish: Dish, context: GenerationContext) -> bool:
         dish.id in context.eligible_dish_ids
         and flags is not None
         and not (flags & frozenset(context.profile.dietary_restrictions))
+        and diet_type_allows(dish, context.profile)
     )

@@ -10,6 +10,7 @@ from typing import Literal
 from app.schemas.weekly_menu import WeeklyMenu
 from app.services.generation_context import GenerationContext
 from app.services.generation_eligibility import (
+    is_egg_dish,
     dietary_conflicts,
     is_eligible,
     normalized_dietary_flags,
@@ -21,7 +22,8 @@ ValidationCode = Literal[
     "recent_repeat",
     "combo_template",
     "dietary_restriction",
-    "nonveg_quota",
+    "meat_quota",
+    "egg_permission",
 ]
 
 
@@ -151,14 +153,30 @@ def validate_menu(menu: WeeklyMenu, context: GenerationContext) -> MenuValidatio
                         )
                     )
 
-    actual_nonveg_dates = {item.day for item, dish in known_items if dish.veg_or_nonveg == "nonveg"}
-    if actual_nonveg_dates != set(context.nonveg_target_dates):
+    actual_meat_dates = {
+        item.day
+        for item, dish in known_items
+        if dish.veg_or_nonveg == "nonveg" and not is_egg_dish(dish)
+    }
+    if actual_meat_dates != set(context.meat_target_dates):
         issues.append(
             ValidationIssue(
-                "nonveg_quota",
-                "non-veg dates must match exactly: "
-                f"expected={sorted(context.nonveg_target_dates)} "
-                f"actual={sorted(actual_nonveg_dates)}",
+                "meat_quota",
+                "meat dates must match exactly: "
+                f"expected={sorted(context.meat_target_dates)} "
+                f"actual={sorted(actual_meat_dates)}",
+            )
+        )
+
+    actual_egg_dates = {item.day for item, dish in known_items if is_egg_dish(dish)}
+    disallowed_egg_dates = actual_egg_dates - set(context.egg_permitted_dates)
+    if disallowed_egg_dates:
+        issues.append(
+            ValidationIssue(
+                "egg_permission",
+                "egg dish used outside egg_permitted_dates: "
+                f"disallowed={sorted(disallowed_egg_dates)} "
+                f"permitted={sorted(context.egg_permitted_dates)}",
             )
         )
 

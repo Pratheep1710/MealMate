@@ -60,16 +60,23 @@ def _pick(
 def build_fallback_plan(context: GenerationContext) -> GeneratedPlan:
     """Choose one minimum-count item per template requirement, never relaxing safety.
 
-    Dietary restrictions, Reserves eligibility, and in-week variety are hard. History is relaxed
-    first when a pool empties. Non-veg placement is attempted on each target date but may relax to
-    the other diet rather than leaving an otherwise fillable slot blank. A truly empty safe pool
-    becomes ``needs_manual_pick``.
+    Dietary restrictions, diet-type/meat-type identity, Reserves eligibility, and in-week variety
+    are hard (all enforced via is_eligible, called from _pick below). History is relaxed first when
+    a pool empties. Meat placement is attempted on each target date but may relax to veg rather than
+    leaving an otherwise fillable slot blank. A truly empty safe pool becomes ``needs_manual_pick``.
+
+    Phase 8 known limitation: this deterministic path only ever aims for desired_diet in
+    {"veg", "nonveg"} (see _pick below) — it has no explicit "place an egg dish on an
+    egg-permitted day" step, so an Eggetarian/egg-eating user's fallback plan will never
+    proactively include an egg dish (though is_eligible guarantees one is never wrongly excluded
+    either, if a caller ever asks for one). Proactive egg placement is the LLM prompt's
+    responsibility (generation_prompt.py); this fallback only guarantees safety, not egg coverage.
     """
     items: list[PlannedItem] = []
     used_variety_ids: set[uuid.UUID] = set()
 
     for day in context.target_days:
-        needs_nonveg = day.date in context.nonveg_target_dates
+        needs_nonveg = day.date in context.meat_target_dates
         for template in context.slot_templates:
             for requirement in template.items:
                 for _ in range(requirement.minimum):
