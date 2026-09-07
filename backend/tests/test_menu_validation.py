@@ -169,7 +169,9 @@ def test_nonveg_dates_must_match_the_profile_target() -> None:
 
 
 def test_egg_dish_outside_egg_permitted_dates_is_rejected() -> None:
-    context = make_context(diet_type="eggetarian", egg_frequency="specific", egg_day_pattern=["mon"])
+    context = make_context(
+        diet_type="eggetarian", egg_frequency="specific", egg_day_pattern=["mon"]
+    )
     # egg_permitted_dates is only Monday for this profile, but make_context's meat_target_dates
     # fixture (hardcoded to {WEEK_START}, a Monday) is what menu_for_context uses to decide which
     # date gets the "nonveg" dish — replace the catalog's nonveg dish with an egg dish and place it

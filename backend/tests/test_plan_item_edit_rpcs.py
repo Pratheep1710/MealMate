@@ -522,7 +522,9 @@ class TestListSwapCandidates:
         """
         user_id = make_user()
         conn.execute(
-            "update user_profiles set nonveg_days_per_week = 1 where id = %s", (user_id,)
+            "update user_profiles set nonveg_days_per_week = 1, "
+            "diet_type = 'nonvegetarian', egg_frequency = 'any' where id = %s",
+            (user_id,),
         )
         already_nonveg_dish = _dish(conn, "Already Nonveg Day", item_type="gravy", diet="nonveg")
         _plan_item(
@@ -559,7 +561,9 @@ class TestListSwapCandidates:
         """
         user_id = make_user()
         conn.execute(
-            "update user_profiles set nonveg_days_per_week = 1 where id = %s", (user_id,)
+            "update user_profiles set nonveg_days_per_week = 1, "
+            "diet_type = 'nonvegetarian', egg_frequency = 'any' where id = %s",
+            (user_id,),
         )
         other_nonveg_dish = _dish(conn, "Other Nonveg Item", item_type="gravy", diet="nonveg")
         _plan_item(
@@ -592,7 +596,9 @@ class TestListSwapCandidates:
         """
         user_id = make_user()
         conn.execute(
-            "update user_profiles set nonveg_days_per_week = 1 where id = %s", (user_id,)
+            "update user_profiles set nonveg_days_per_week = 1, "
+            "diet_type = 'nonvegetarian', egg_frequency = 'any' where id = %s",
+            (user_id,),
         )
         already_nonveg_dish = _dish(conn, "Already Nonveg Day", item_type="gravy", diet="nonveg")
         _plan_item(

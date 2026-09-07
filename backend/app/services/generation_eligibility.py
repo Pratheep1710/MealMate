@@ -32,8 +32,14 @@ def is_egg_dish(dish: Dish) -> bool:
     no separate 'eggetarian' category on dishes (dishes.veg_or_nonveg is binary). The ingestion
     pipeline force-tags every egg-diet dish this way (supabase/seed/catalog_taxonomy.py's
     belt-and-suspenders note), so this is a reliable signal, not a heuristic.
+
+    Routed through normalized_dietary_flags rather than reading dietary_flags directly, so missing
+    or malformed metadata fails closed here too (returns False, same as "not an egg dish") instead
+    of raising — is_eligible already rejects such a dish outright via its own `flags is not None`
+    check, so this only needs to not crash on the way there.
     """
-    return dish.veg_or_nonveg == "nonveg" and "Egg" in dish.dietary_flags
+    flags = normalized_dietary_flags(dish)
+    return dish.veg_or_nonveg == "nonveg" and flags is not None and "Egg" in flags
 
 
 def diet_type_allows(dish: Dish, profile: UserProfile) -> bool:

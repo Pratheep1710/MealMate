@@ -13,7 +13,8 @@ the pattern is precise, so days outside it are pinned veg by the same logic that
 days to meat. When no pattern is set, nonveg_days_per_week is a count-only constraint (some N days
 somewhere in the week), so every day stays 'flexible' here; Phase 6's generation context resolves
 the remaining quota into deterministic evenly-spaced target dates. Both fields are DB-constrained
-to be inert (0/empty) unless profile.diet_type == 'nonvegetarian' (0021_onboarding_diet_taxonomy.sql).
+to be inert (0/empty) unless profile.diet_type == 'nonvegetarian'
+(0021_onboarding_diet_taxonomy.sql).
 """
 
 from __future__ import annotations

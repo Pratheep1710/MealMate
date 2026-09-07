@@ -10,7 +10,12 @@
 -- as the "is this dish an egg dish" signal — see backend/app/services/generation_eligibility.py's
 -- `_is_egg_dish`. `dishes.meat_type` already carries exactly Q2's vocabulary.
 
-alter table user_profiles add column diet_type text not null default 'nonvegetarian';
+-- Default 'vegetarian' rather than 'nonvegetarian': it's the only value self-consistent with
+-- every other new column's own default (egg_frequency defaults null, meat_types defaults '{}',
+-- and nonveg_days_per_week/nonveg_day_pattern have no default at all, i.e. null) — a bare insert
+-- that omits every Phase 8 column entirely (any pre-existing test/tooling insert not updated for
+-- this migration) must not trip the coupling constraints below just by using the column defaults.
+alter table user_profiles add column diet_type text not null default 'vegetarian';
 
 -- Backfill before constraining: pre-existing rows (pre-dating this column) have no recorded
 -- diet_type. Best-effort derive from the existing meat-quota field — "eggetarian" can't be

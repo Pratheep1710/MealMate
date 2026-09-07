@@ -93,17 +93,15 @@ def test_mid_week_signup_in_reserves_mode_returns_the_upcoming_trigger_day() -> 
     # Reserves triggers grocery_day + 1: same Tuesday signup, Saturday grocery_day. The Sunday
     # right after this Saturday (Aug 23) already passed relative to this Tuesday (Aug 25), so the
     # next occurrence is a full week out — Aug 30, not Aug 23.
-    assert compute_first_plan_start(_TUESDAY, "saturday", "reserves") == _SUNDAY + datetime.timedelta(
-        days=7
-    )
+    expected = _SUNDAY + datetime.timedelta(days=7)
+    assert compute_first_plan_start(_TUESDAY, "saturday", "reserves") == expected
 
 
 def test_first_plan_start_wraps_correctly_across_a_week_boundary() -> None:
     # grocery_day=Monday, Suggestion triggers the day before (Sunday) — starting from a Monday
     # itself must roll all the way to the *next* Sunday, not "yesterday".
-    assert compute_first_plan_start(_MONDAY, "monday", "suggestion") == _SUNDAY + datetime.timedelta(
-        days=7
-    )
+    expected = _SUNDAY + datetime.timedelta(days=7)
+    assert compute_first_plan_start(_MONDAY, "monday", "suggestion") == expected
 
 
 def test_first_plan_start_never_looks_more_than_six_days_out() -> None:

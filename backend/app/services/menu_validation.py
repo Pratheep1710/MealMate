@@ -10,8 +10,8 @@ from typing import Literal
 from app.schemas.weekly_menu import WeeklyMenu
 from app.services.generation_context import GenerationContext
 from app.services.generation_eligibility import (
-    is_egg_dish,
     dietary_conflicts,
+    is_egg_dish,
     is_eligible,
     normalized_dietary_flags,
 )

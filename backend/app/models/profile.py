@@ -58,7 +58,9 @@ class UserProfile(BaseModel):
     def _meat_types_are_in_the_controlled_vocabulary(cls, value: list[str]) -> list[str]:
         invalid = [v for v in value if v not in MEAT_TYPE_VALUES]
         if invalid:
-            raise ValueError(f"meat_types contains values outside the controlled vocabulary: {invalid}")
+            raise ValueError(
+                f"meat_types contains values outside the controlled vocabulary: {invalid}"
+            )
         return value
 
     @field_validator("egg_frequency")
