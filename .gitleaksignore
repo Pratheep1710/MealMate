@@ -5,3 +5,11 @@
 # from the repo going forward regardless. This entry only silences that one already-remediated
 # historical finding; it does not exempt this file or path from future scans.
 d94c3ae6e3f4490080ffaa50007251e42849f352:mobile/google-services.json:gcp-api-key:18
+
+# Phase 9 (MP-092/093/094): both findings are the same literal test-only HMAC secret constant
+# ("test-jwt-secret-that-is-long-enough-for-hs256") used to sign/verify JWTs inside
+# backend/tests/test_auth.py and test_routes.py — never a real credential, never used against any
+# live Supabase project or service. gitleaks' generic-api-key rule flags the assignment shape
+# (VAR = "...") regardless, so this is a documented false positive, not a remediation.
+4153694fa7ac014de1e251bd156e1a4955e12b9f:backend/tests/test_auth.py:generic-api-key:19
+4153694fa7ac014de1e251bd156e1a4955e12b9f:backend/tests/test_routes.py:generic-api-key:68
