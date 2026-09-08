@@ -44,6 +44,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     extra: {
       supabaseUrl: clientConfig.supabaseUrl,
       supabaseAnonKey: clientConfig.supabaseAnonKey,
+      backendUrl: clientConfig.backendUrl,
       eas: {
         projectId: '4a06cb26-500e-4067-bbe6-f8c2fdf50058',
       },

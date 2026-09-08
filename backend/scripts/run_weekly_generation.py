@@ -6,19 +6,15 @@ import datetime
 import sys
 from dataclasses import dataclass
 
-import httpx
-
 from app.config import ConfigError, load_config
 from app.db import connect
 from app.logging import get_logger
-from app.repositories import notifications as notifications_repo
 from app.repositories import profiles as profiles_repo
-from app.repositories import push_tokens as push_tokens_repo
 from app.services.generation_context import build_generation_catalog
-from app.services.generation_engine import GenerationOutcome, run_generation_engine
+from app.services.generation_engine import run_generation_engine
+from app.services.notification_dispatch import dispatch_week_ready
 from app.services.openai_generation import OpenAIWeeklyMenuGenerator
-from app.services.planning_trigger import compute_trigger
-from app.services.push_dispatch import PushSendError, send_expo_push_with_one_retry
+from app.services.planning_trigger import compute_trigger, week_start_monday
 
 logger = get_logger(__name__)
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -29,8 +25,11 @@ def _today_ist() -> datetime.date:
 
 
 def _week_start_for_grocery_day(grocery_day_date: datetime.date) -> datetime.date:
-    """Calendar-week anchor for the grocery-day occurrence that caused this trigger."""
-    return grocery_day_date - datetime.timedelta(days=grocery_day_date.weekday())
+    """Calendar-week anchor for the grocery-day occurrence that caused this trigger. Phase 9:
+    delegates to planning_trigger.week_start_monday, the shared home for this now that the live
+    /generation/trigger endpoint needs the exact same Monday-of-week computation.
+    """
+    return week_start_monday(grocery_day_date)
 
 
 @dataclass(frozen=True)
@@ -39,56 +38,6 @@ class SweepResult:
     skipped: int
     failed: int
     notified: int
-
-
-def _dispatch_week_ready(
-    conn,
-    outcome: GenerationOutcome,
-    access_token: str | None,
-) -> bool:
-    notification = notifications_repo.try_claim(conn, outcome.persistence.notification.id)
-    conn.commit()
-    if notification is None:
-        return False
-
-    tokens = push_tokens_repo.list_tokens_for_user(conn, outcome.job.user_id)
-    last_ticket_id: str | None = None
-    any_sent = False
-    for token in tokens:
-        try:
-            ticket_id = send_expo_push_with_one_retry(
-                token.expo_push_token,
-                "Your week is ready",
-                "Your meal ideas and grocery list are ready to review.",
-                access_token,
-            )
-        except (PushSendError, httpx.HTTPError) as exc:
-            logger.warning("week_ready.send_failed", error_type=type(exc).__name__)
-            # PR review fix (MP-071): audit this device's failure individually — the weekly sender
-            # had the same "last ticket wins" gap as the daily reminder's.
-            notifications_repo.record_device_result(
-                conn, notification.id, token.expo_push_token, "failed", error=str(exc)
-            )
-            continue
-        notifications_repo.record_device_result(
-            conn, notification.id, token.expo_push_token, "sent", expo_ticket_id=ticket_id
-        )
-        last_ticket_id = ticket_id
-        any_sent = True
-
-    if not any_sent:
-        notifications_repo.mark_status(conn, notification.id, "failed", increment_attempt=True)
-        conn.commit()
-        return False
-    notifications_repo.mark_status(
-        conn,
-        notification.id,
-        "sent",
-        expo_ticket_id=last_ticket_id,
-        increment_attempt=True,
-    )
-    conn.commit()
-    return True
 
 
 def run_sweep(conn, sweep_date: datetime.date, generator, access_token: str | None) -> SweepResult:
@@ -130,7 +79,7 @@ def run_sweep(conn, sweep_date: datetime.date, generator, access_token: str | No
                 skipped += 1
                 continue
             generated += 1
-            if _dispatch_week_ready(conn, outcome, access_token):
+            if dispatch_week_ready(conn, outcome, access_token):
                 notified += 1
         except Exception as exc:
             # Always restore the shared connection before advancing to the next profile. This is

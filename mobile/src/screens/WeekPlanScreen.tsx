@@ -8,6 +8,7 @@ import { RefreshIcon } from '../components/icons';
 import { PulseRing } from '../components/PulseRing';
 import { Shimmer } from '../components/Shimmer';
 import { useSession } from '../contexts/SessionContext';
+import { getInstantFallback, type InstantFallbackItem } from '../lib/backendClient';
 import { supabase } from '../lib/supabase';
 import { type CachedPayload, loadCache, saveCache } from '../lib/weekCache';
 import type { PlanStackParamList } from '../navigation/types';
@@ -15,11 +16,15 @@ import { colors, fonts, radii, spacing } from '../theme/tokens';
 import {
   CHRONOLOGICAL_SLOTS,
   kickerFor,
+  nextRelevantSlots,
   phaseFor,
+  type RelevantSlots,
   type RollingDay,
   rollingDays,
   SLOT_META,
   type Slot,
+  type SlotPhase,
+  toISODate,
 } from './weekPlan/rollingDays';
 
 // MP-027, redesigned per the Claude Design pass (project b56ee743, "Meal Planner.dc.html"): the
@@ -61,6 +66,11 @@ type MealPlanRow = {
 type ViewState =
   | { kind: 'loading' }
   | { kind: 'ready'; plans: MealPlanRow[] }
+  // MP-092: a brand-new user whose first plan hasn't been generated yet, distinguished from an
+  // existing user's genuinely-empty today (still 'ready' with an empty todayRows) by the presence
+  // of a pending/processing generation_jobs row — see hasPendingOrProcessingGenerationJob below.
+  // `fallback: null` means the instant-fallback fetch (MP-093) is still in flight.
+  | { kind: 'first-plan-pending'; fallback: InstantFallbackItem[] | null; relevant: RelevantSlots }
   | { kind: 'offline'; cached: CachedPayload<MealPlanRow[]> | null };
 
 const CACHE_KEY = 'week-plan';
@@ -114,6 +124,45 @@ async function fetchRollingWindow(days: RollingDay[]): Promise<MealPlanRow[]> {
   return (data ?? []) as unknown as MealPlanRow[];
 }
 
+// MP-092/094: RLS (0006_rls_policies.sql's generation_jobs_select_own) already scopes this to the
+// signed-in user, same as fetchRollingWindow above — no explicit user_id filter needed.
+async function hasPendingOrProcessingGenerationJob(): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('generation_jobs')
+    .select('id')
+    .in('status', ['pending', 'processing'])
+    .limit(1);
+  if (error) {
+    throw error;
+  }
+  return (data ?? []).length > 0;
+}
+
+// MP-093: adapts the instant-fallback endpoint's flat item list into the same MealPlanRow shape
+// SlotRow already renders, so the pending-state preview reuses that rendering rather than a
+// second, near-duplicate one — mirrors composeLine/orderedItems' existing item-grouping shape.
+function fallbackRowFor(date: Date, slot: Slot, items: InstantFallbackItem[]): MealPlanRow | null {
+  const iso = toISODate(date);
+  const matches = items.filter((item) => item.day === iso && item.slot === slot);
+  if (matches.length === 0) {
+    return null;
+  }
+  return {
+    id: `fallback|${iso}|${slot}`,
+    plan_date: iso,
+    slot,
+    is_skipped: false,
+    plan_items: matches.map((item, index) => ({
+      id: `fallback|${iso}|${slot}|${index}`,
+      item_type: item.item_type,
+      status: item.dish_id ? 'filled' : 'needs_manual_pick',
+      make_extra: false,
+      dish_id: item.dish_id,
+      dishes: item.dish_name ? { name: item.dish_name } : null,
+    })),
+  };
+}
+
 export function WeekPlanScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<PlanStackParamList, 'WeekPlan'>>();
   const { session } = useSession();
@@ -135,6 +184,16 @@ export function WeekPlanScreen() {
     }
     try {
       const plans = await fetchRollingWindow(days);
+      if (plans.length === 0 && (await hasPendingOrProcessingGenerationJob())) {
+        const relevant = nextRelevantSlots(new Date());
+        setView({ kind: 'first-plan-pending', fallback: null, relevant });
+        // Best-effort: if this fails, the pending card still shows (without a preview meal) and
+        // the Realtime subscription below still transitions to the real plan once it's ready —
+        // never fall back to StillCookingCard's misleading "usually done by 8 PM" copy here.
+        const fallback = await getInstantFallback().catch(() => [] as InstantFallbackItem[]);
+        setView({ kind: 'first-plan-pending', fallback, relevant });
+        return;
+      }
       setView({ kind: 'ready', plans });
       await saveCache(CACHE_KEY, userId, plans);
     } catch {
@@ -157,6 +216,40 @@ export function WeekPlanScreen() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [userId]),
   );
+
+  // MP-092: learns that MP-094's generation finished the same way MP-069's "your week is ready"
+  // push already does — this user's generation_jobs row flipping to status = 'done' — via
+  // Supabase Realtime, not a new polling loop (0023_generation_jobs_realtime.sql adds the table
+  // to the supabase_realtime publication; RLS scopes delivered events the same as a direct select).
+  // On that event, refetch once and let the fallback state be fully replaced by the real plan —
+  // never merged, so the fallback and the real plan are never shown at the same time.
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    const channel = supabase
+      .channel(`generation-jobs-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'generation_jobs',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { new: { status?: string } }) => {
+          if (payload.new?.status === 'done') {
+            load();
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   // MP-061: skip/eating-out toggle. 0012_meal_plans_skip_toggle_rls.sql grants the owning user a
   // direct write to this one column, matching the rest of this app's "every edit autosaves and is
@@ -260,6 +353,31 @@ export function WeekPlanScreen() {
         onRetry={load}
         onUseCache={(plans) => setView({ kind: 'ready', plans })}
       />
+    );
+  }
+
+  if (view.kind === 'first-plan-pending') {
+    return (
+      <ScrollView contentContainerStyle={styles.scroll} testID="week-plan-first-plan-pending">
+        <Header today={days[0]} onOpenInfo={() => setInfoSheetOpen(true)} busy={false} />
+        <FirstPlanPendingCard />
+        {view.fallback === null ? (
+          <TodaySkeleton />
+        ) : (
+          <View style={styles.card}>
+            {view.relevant.slots.map((slot, index) => (
+              <SlotRow
+                key={slot}
+                slot={slot}
+                row={fallbackRowFor(view.relevant.date, slot, view.fallback!)}
+                isLast={index === view.relevant.slots.length - 1}
+                phaseOverride={index === 0 ? 'now' : 'upcoming'}
+              />
+            ))}
+          </View>
+        )}
+        <InfoSheet visible={infoSheetOpen} onClose={() => setInfoSheetOpen(false)} />
+      </ScrollView>
     );
   }
 
@@ -382,15 +500,20 @@ function SlotRow({
   row,
   isLast,
   onPress,
+  phaseOverride,
 }: {
   slot: Slot;
   row: MealPlanRow | null;
   isLast: boolean;
   onPress?: () => void;
+  // MP-092: the pending-state preview shows slots from nextRelevantSlots, which may be tomorrow's
+  // (the late-night edge case) — phaseFor's wall-clock comparison assumes "today", so that preview
+  // supplies its own phase instead of letting this recompute one for the wrong date.
+  phaseOverride?: SlotPhase;
 }) {
   const meta = SLOT_META[slot];
   const currentHour = new Date().getHours() + new Date().getMinutes() / 60;
-  const phase = phaseFor(slot, currentHour);
+  const phase = phaseOverride ?? phaseFor(slot, currentHour);
   const skipped = row?.is_skipped ?? false;
   const line = row ? composeLine(row.plan_items) : null;
 
@@ -463,6 +586,26 @@ function StillCookingCard() {
         <Text style={styles.infoCardTitle}>Putting today together</Text>
         <Text style={styles.infoCardBody}>
           Usually done by 8 PM the evening before. Nothing to do until then.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// MP-092: distinct copy from StillCookingCard's "usually done by 8 PM the evening before" — that
+// line is actively wrong for a brand-new signup, whose first generation may not fire for up to six
+// days (compute_first_plan_start). Matches GroceryListScreen's "not generated yet" pattern: an
+// honest, distinct state rather than reusing existing-user copy for a first-time user.
+function FirstPlanPendingCard() {
+  return (
+    <View style={styles.infoCard} testID="first-plan-pending-card">
+      <View style={styles.steamIcon}>
+        <PulseRing size={22} />
+      </View>
+      <View style={{ flex: 1, gap: 5 }}>
+        <Text style={styles.infoCardTitle}>Building your first plan</Text>
+        <Text style={styles.infoCardBody}>
+          Here&apos;s an idea for what&apos;s next while we put together your full week.
         </Text>
       </View>
     </View>

@@ -5,6 +5,13 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection convention (app/auth.py, app/deps.py, Phase 9) is exactly
+# `param: T = Depends(...)` — B008 otherwise flags this as a mutable-default anti-pattern, but
+# Depends() returns an immutable sentinel FastAPI itself resolves per-request, not a value shared
+# across calls.
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

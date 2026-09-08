@@ -1,8 +1,10 @@
 """MP-029: FastAPI application entrypoint.
 
-No product routes yet — those land with the phases that need them (M4 generation triggers, M6
-notification webhooks). This exists now so the package is importable/runnable as a FastAPI app
-(the AC's "FastAPI package" half) and so Render has something to point a health check at.
+Phase 9 (MP-092/093/094) adds the first product routes — see app/routes.py — now that onboarding
+completion needs to trigger real generation and render an instant fallback synchronously, neither
+of which the scheduled-script-only architecture could do. This is also the first thing that makes
+Render's health check (below) load-bearing rather than decorative: app/main.py must actually be
+deployed and served for these to be reachable at all — see the repo-root render.yaml.
 """
 
 from __future__ import annotations
@@ -10,8 +12,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.config import ConfigError, load_config
+from app.routes import router
 
 app = FastAPI(title="Meal Planner backend")
+app.include_router(router)
 
 
 @app.get("/health")

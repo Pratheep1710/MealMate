@@ -14,7 +14,7 @@ export class ConfigError extends Error {}
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
- * @returns {{ supabaseUrl: string, supabaseAnonKey: string }}
+ * @returns {{ supabaseUrl: string, supabaseAnonKey: string, backendUrl: string }}
  */
 export function loadClientConfig(env = process.env) {
   const problems = [];
@@ -35,11 +35,25 @@ export function loadClientConfig(env = process.env) {
     problems.push('  - EXPO_PUBLIC_SUPABASE_ANON_KEY is missing');
   }
 
+  // Phase 9 (MP-092/093/094): the live backend (render.yaml) the mobile client calls right after
+  // onboarding — see src/lib/backendClient.ts. Same fail-fast contract as the two Supabase vars
+  // above, not a silent-null fallback.
+  const backendUrl = env.EXPO_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    problems.push('  - EXPO_PUBLIC_BACKEND_URL is missing');
+  } else {
+    try {
+      new URL(backendUrl);
+    } catch {
+      problems.push('  - EXPO_PUBLIC_BACKEND_URL is not a valid URL');
+    }
+  }
+
   if (problems.length > 0) {
     throw new ConfigError(
       'Mobile config is invalid — fix the following environment variables:\n' + problems.join('\n'),
     );
   }
 
-  return { supabaseUrl: url, supabaseAnonKey: anonKey };
+  return { supabaseUrl: url, supabaseAnonKey: anonKey, backendUrl };
 }

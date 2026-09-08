@@ -74,3 +74,13 @@ def compute_first_plan_start(
         if compute_trigger(candidate, grocery_day, planning_mode).should_trigger:
             return candidate
     raise AssertionError("unreachable: the trigger day recurs at least once every 7 days")
+
+
+def week_start_monday(date: datetime.date) -> datetime.date:
+    """Phase 9 (MP-094): the Monday of the calendar week containing `date` — mirrors the SQL
+    function of the same name (supabase/migrations/0019_plan_item_edit_rpcs.sql's
+    week_start_monday) and the one-liner backend/scripts/run_weekly_generation.py's
+    _week_start_for_grocery_day already computes ad hoc, given a proper home now that a second
+    call site (the live /generation/trigger endpoint) needs the exact same thing.
+    """
+    return date - datetime.timedelta(days=date.weekday())

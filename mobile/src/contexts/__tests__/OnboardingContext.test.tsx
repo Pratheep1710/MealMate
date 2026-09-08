@@ -4,6 +4,7 @@ import { OnboardingProvider, useOnboarding } from '../OnboardingContext';
 
 const mockInsert = jest.fn();
 const mockRefresh = jest.fn();
+const mockTriggerGeneration = jest.fn();
 
 jest.mock('../../lib/supabase', () => ({
   supabase: {
@@ -11,6 +12,10 @@ jest.mock('../../lib/supabase', () => ({
       insert: (...args: unknown[]) => mockInsert(...args),
     }),
   },
+}));
+
+jest.mock('../../lib/backendClient', () => ({
+  triggerGeneration: (...args: unknown[]) => mockTriggerGeneration(...args),
 }));
 
 jest.mock('../SessionContext', () => ({
@@ -44,6 +49,7 @@ function renderOnboarding() {
 beforeEach(() => {
   jest.clearAllMocks();
   mockInsert.mockResolvedValue({ error: null });
+  mockTriggerGeneration.mockResolvedValue({ week_start: '2026-09-07' });
 });
 
 describe('OnboardingContext.submit', () => {
@@ -237,5 +243,63 @@ describe('OnboardingContext.submit', () => {
 
     expect(result?.error).toBeTruthy();
     expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it('fires the MP-094 generation trigger after a successful insert', async () => {
+    const onboarding = renderOnboarding();
+    act(() => {
+      onboarding.current().updateDraft({
+        dietType: 'vegetarian',
+        eggFrequency: null,
+        planningMode: 'suggestion',
+        groceryDay: 'monday',
+      });
+    });
+
+    await act(async () => {
+      await onboarding.current().submit();
+    });
+
+    expect(mockTriggerGeneration).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not surface a generation-trigger failure as an onboarding error', async () => {
+    mockTriggerGeneration.mockRejectedValue(new Error('backend unreachable'));
+    const onboarding = renderOnboarding();
+    act(() => {
+      onboarding.current().updateDraft({
+        dietType: 'vegetarian',
+        eggFrequency: null,
+        planningMode: 'suggestion',
+        groceryDay: 'monday',
+      });
+    });
+
+    let result: { error: string | null } | undefined;
+    await act(async () => {
+      result = await onboarding.current().submit();
+    });
+
+    expect(result?.error).toBeNull();
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire the generation trigger when the insert itself fails', async () => {
+    mockInsert.mockResolvedValue({ error: { message: 'insert failed' } });
+    const onboarding = renderOnboarding();
+    act(() => {
+      onboarding.current().updateDraft({
+        dietType: 'vegetarian',
+        eggFrequency: null,
+        planningMode: 'suggestion',
+        groceryDay: 'monday',
+      });
+    });
+
+    await act(async () => {
+      await onboarding.current().submit();
+    });
+
+    expect(mockTriggerGeneration).not.toHaveBeenCalled();
   });
 });

@@ -11,7 +11,11 @@ import datetime
 
 import pytest
 
-from app.services.planning_trigger import compute_first_plan_start, compute_trigger
+from app.services.planning_trigger import (
+    compute_first_plan_start,
+    compute_trigger,
+    week_start_monday,
+)
 
 _SUNDAY = datetime.date(2026, 8, 23)
 _MONDAY = datetime.date(2026, 8, 24)
@@ -117,3 +121,18 @@ def test_first_plan_start_never_looks_more_than_six_days_out() -> None:
         ):
             result = compute_first_plan_start(_WEDNESDAY, grocery_day, planning_mode)
             assert _WEDNESDAY <= result <= _WEDNESDAY + datetime.timedelta(days=6)
+
+
+# Phase 9 (MP-094): week_start_monday — pure date arithmetic, no DB needed.
+
+
+def test_week_start_monday_of_a_date_already_on_monday_is_itself() -> None:
+    assert week_start_monday(_MONDAY) == _MONDAY
+
+
+def test_week_start_monday_rolls_a_mid_week_date_back_to_its_monday() -> None:
+    assert week_start_monday(_WEDNESDAY) == _MONDAY
+
+
+def test_week_start_monday_rolls_sunday_back_to_the_preceding_monday() -> None:
+    assert week_start_monday(_SUNDAY) == _MONDAY - datetime.timedelta(days=7)

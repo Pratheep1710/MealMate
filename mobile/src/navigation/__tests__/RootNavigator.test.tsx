@@ -26,6 +26,12 @@ jest.mock('../../lib/supabase', () => ({
         }),
       }),
     }),
+    // MP-092: WeekPlanScreen also opens a Realtime channel on mount — never delivers an event
+    // here, same "stay in loading" intent as the never-resolving from() chain above.
+    channel: () => ({
+      on: () => ({ subscribe: () => ({}) }),
+    }),
+    removeChannel: () => {},
   },
 }));
 
