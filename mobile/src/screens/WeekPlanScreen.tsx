@@ -1,6 +1,6 @@
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { BottomSheet } from '../components/BottomSheet';
@@ -174,7 +174,10 @@ export function WeekPlanScreen() {
   const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[] | null>(null);
   const [dismissedQuickSwapIds, setDismissedQuickSwapIds] = useState<Set<string>>(new Set());
 
-  const load = async () => {
+  const loadGeneration = useRef(0);
+  const load = useCallback(async () => {
+    const request = ++loadGeneration.current;
+    const isCurrent = () => request === loadGeneration.current;
     setView({ kind: 'loading' });
     if (!userId) {
       // This screen only ever mounts inside the authenticated tree (RootNavigator), so this is
@@ -184,23 +187,29 @@ export function WeekPlanScreen() {
     }
     try {
       const plans = await fetchRollingWindow(days);
-      if (plans.length === 0 && (await hasPendingOrProcessingGenerationJob())) {
+      if (!isCurrent()) return;
+      const pending = plans.length === 0 && (await hasPendingOrProcessingGenerationJob());
+      if (!isCurrent()) return;
+      if (pending) {
         const relevant = nextRelevantSlots(new Date());
         setView({ kind: 'first-plan-pending', fallback: null, relevant });
         // Best-effort: if this fails, the pending card still shows (without a preview meal) and
         // the Realtime subscription below still transitions to the real plan once it's ready —
         // never fall back to StillCookingCard's misleading "usually done by 8 PM" copy here.
         const fallback = await getInstantFallback().catch(() => [] as InstantFallbackItem[]);
+        if (!isCurrent()) return;
         setView({ kind: 'first-plan-pending', fallback, relevant });
         return;
       }
       setView({ kind: 'ready', plans });
       await saveCache(CACHE_KEY, userId, plans);
     } catch {
+      if (!isCurrent()) return;
       const cached = await loadCache<MealPlanRow[]>(CACHE_KEY, userId);
+      if (!isCurrent()) return;
       setView({ kind: 'offline', cached });
     }
-  };
+  }, [days, userId]);
 
   // PR review fix: this screen stays mounted underneath DayReviewEditScreen's native-stack route
   // (React Navigation doesn't unmount the screen below), so a plain mount-only effect never saw a
@@ -211,10 +220,7 @@ export function WeekPlanScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-      // `load` is intentionally omitted: it's stable in practice (only closes over `days` and
-      // `userId`, and including it would refetch on every render).
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userId]),
+    }, [load]),
   );
 
   // MP-092: learns that MP-094's generation finished the same way MP-069's "your week is ready"
@@ -227,29 +233,33 @@ export function WeekPlanScreen() {
     if (!userId) {
       return;
     }
+    const requests = loadGeneration;
     const channel = supabase
       .channel(`generation-jobs-${userId}`)
       .on(
         'postgres_changes',
         {
-          event: 'UPDATE',
+          event: '*',
           schema: 'public',
           table: 'generation_jobs',
           filter: `user_id=eq.${userId}`,
         },
         (payload: { new: { status?: string } }) => {
-          if (payload.new?.status === 'done') {
+          if (['pending', 'processing', 'done', 'failed'].includes(payload.new?.status ?? '')) {
             load();
           }
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        // Close the gap between the initial SELECT and the subscription becoming active.
+        if (status === 'SUBSCRIBED') load();
+      });
 
     return () => {
+      ++requests.current;
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [load, userId]);
 
   // MP-061: skip/eating-out toggle. 0012_meal_plans_skip_toggle_rls.sql grants the owning user a
   // direct write to this one column, matching the rest of this app's "every edit autosaves and is

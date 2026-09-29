@@ -64,7 +64,7 @@ def test_sweep_reuses_catalog_and_recovers_connection_after_one_profile_failure(
     monkeypatch.setattr(run_weekly_generation, "build_generation_catalog", build_catalog)
     calls = []
 
-    def generate(conn, user_id, week_start, generator, *, catalog):
+    def generate(conn, user_id, week_start, generator, *, catalog, start_date):
         calls.append((user_id, week_start, catalog))
         if user_id == first.id:
             raise RuntimeError("transient claim failure")

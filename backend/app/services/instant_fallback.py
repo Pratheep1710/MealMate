@@ -40,10 +40,17 @@ def build_instant_fallback(
     """Items for `today` through `today + days_ahead - 1` only — MP-092 renders 1-2 slots, not a
     full week, so there is no reason to hand back more than a couple of days' worth of picks.
     """
-    context = build_generation_context(
-        conn, user_id, week_start_monday(today), start_date=today
-    )
-    plan = build_fallback_plan(context)
+    if days_ahead < 1:
+        raise ValueError("days_ahead must be positive")
     cutoff = today + datetime.timedelta(days=days_ahead - 1)
-    items = tuple(item for item in plan.items if item.day <= cutoff)
-    return InstantFallback(items=items, dishes_by_id=context.dishes_by_id)
+    items: list[PlannedItem] = []
+    dishes_by_id: dict[uuid.UUID, Dish] = {}
+    cursor = today
+    while cursor <= cutoff:
+        week_start = week_start_monday(cursor)
+        context = build_generation_context(conn, user_id, week_start, start_date=cursor)
+        plan = build_fallback_plan(context)
+        items.extend(item for item in plan.items if cursor <= item.day <= cutoff)
+        dishes_by_id.update(context.dishes_by_id)
+        cursor = week_start + datetime.timedelta(days=7)
+    return InstantFallback(items=tuple(items), dishes_by_id=dishes_by_id)

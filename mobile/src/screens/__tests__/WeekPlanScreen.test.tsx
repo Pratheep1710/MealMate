@@ -19,15 +19,21 @@ const mockGetInstantFallback = jest.fn();
 // Realtime channel mock: `.on()` captures the registered callback so tests can fire a synthetic
 // postgres_changes event directly, mirroring how the real Supabase client would deliver one.
 let capturedRealtimeCallback: ((payload: { new: { status?: string } }) => void) | null = null;
+let capturedSubscribeCallback: ((status: string) => void) | null = null;
+let capturedRealtimeFilter: unknown;
 function mockChannel(..._args: unknown[]) {
   const channel: Record<string, unknown> = {};
   channel.on = jest.fn(
     (_event: string, _filter: unknown, callback: typeof capturedRealtimeCallback) => {
       capturedRealtimeCallback = callback;
+      capturedRealtimeFilter = _filter;
       return channel;
     },
   );
-  channel.subscribe = jest.fn(() => channel);
+  channel.subscribe = jest.fn((callback: typeof capturedSubscribeCallback) => {
+    capturedSubscribeCallback = callback;
+    return channel;
+  });
   return channel;
 }
 
@@ -129,6 +135,7 @@ beforeEach(async () => {
   jest.clearAllMocks();
   await AsyncStorage.clear();
   capturedRealtimeCallback = null;
+  capturedSubscribeCallback = null;
   mockUseSession.mockReturnValue({ session: { user: { id: 'user-1' } } });
   mockRpc.mockReturnValue(Promise.resolve({ data: [], error: null }));
   mockGetInstantFallback.mockResolvedValue([]);
@@ -512,6 +519,65 @@ describe('WeekPlanScreen', () => {
   // "building your first plan" state with an instant-fallback preview, not the existing-user
   // StillCookingCard copy that's wrong for a signup whose real first plan may be days out.
   describe('first-plan-pending (MP-092/093/094)', () => {
+    it('reconciles jobs created between the initial query and subscription readiness', async () => {
+      mockFromByTable([]);
+      const tree = await renderScreen();
+      expect(textOf(tree)).toContain('Putting today together');
+      expect(capturedRealtimeFilter).toEqual({
+        event: '*',
+        schema: 'public',
+        table: 'generation_jobs',
+        filter: 'user_id=eq.user-1',
+      });
+      mockFromByTable([{ id: 'job-1' }]);
+      await act(async () => {
+        capturedSubscribeCallback!('SUBSCRIBED');
+        await flushAsync();
+        await flushAsync();
+      });
+      expect(textOf(tree)).toContain('Building your first plan');
+    });
+    it.each(['resolve', 'reject'])('ignores a superseded fallback %s', async (settlement) => {
+      let resolve!: (items: unknown[]) => void;
+      let reject!: (error: Error) => void;
+      mockGetInstantFallback.mockReturnValue(
+        new Promise((res, rej) => {
+          resolve = res;
+          reject = rej;
+        }),
+      );
+      mockFromByTable([{ id: 'job-1' }]);
+      const tree = await renderScreen();
+      expect(textOf(tree)).toContain('Building your first plan');
+      mockFrom.mockReturnValue(chainable({ data: [todayRow()], error: null }));
+      await act(async () => {
+        capturedRealtimeCallback!({ new: { status: 'done' } });
+        await flushAsync();
+        await flushAsync();
+      });
+      expect(textOf(tree)).toContain('Sambar Sadam');
+      await act(async () => {
+        if (settlement === 'resolve') resolve([]);
+        else reject(new Error('late failure'));
+        await flushAsync();
+      });
+      expect(textOf(tree)).toContain('Sambar Sadam');
+      expect(textOf(tree)).not.toContain('Building your first plan');
+    });
+
+    it.each(['pending', 'processing'])('discovers a %s job created after mount', async (status) => {
+      mockFromByTable([]);
+      const tree = await renderScreen();
+      expect(textOf(tree)).toContain('Putting today together');
+      mockFromByTable([{ id: 'job-1' }]);
+      await act(async () => {
+        capturedRealtimeCallback!({ new: { status } });
+        await flushAsync();
+        await flushAsync();
+      });
+      expect(textOf(tree)).toContain('Building your first plan');
+    });
+
     function mockFromByTable(generationJobsData: unknown[]) {
       mockFrom.mockImplementation((table: string) =>
         table === 'generation_jobs'
@@ -572,7 +638,7 @@ describe('WeekPlanScreen', () => {
       expect(textOf(tree)).not.toContain('Building your first plan');
     });
 
-    it('does not refetch on a Realtime event for a status other than done', async () => {
+    it('does not refetch on an event without a job status', async () => {
       mockFromByTable([{ id: 'job-1' }]);
       mockGetInstantFallback.mockResolvedValue([]);
 
@@ -580,7 +646,7 @@ describe('WeekPlanScreen', () => {
       const callsBefore = mockFrom.mock.calls.length;
 
       await act(async () => {
-        capturedRealtimeCallback!({ new: { status: 'processing' } });
+        capturedRealtimeCallback!({ new: {} });
         await flushAsync();
       });
 

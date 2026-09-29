@@ -14,7 +14,7 @@ from app.services.generation_context import build_generation_catalog
 from app.services.generation_engine import run_generation_engine
 from app.services.notification_dispatch import dispatch_week_ready
 from app.services.openai_generation import OpenAIWeeklyMenuGenerator
-from app.services.planning_trigger import compute_trigger, week_start_monday
+from app.services.planning_trigger import compute_plan_target, week_start_monday
 
 logger = get_logger(__name__)
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -45,7 +45,7 @@ def run_sweep(conn, sweep_date: datetime.date, generator, access_token: str | No
     triggered = []
     for profile in profiles_repo.list_profiles(conn):
         try:
-            decision = compute_trigger(sweep_date, profile.grocery_day, profile.planning_mode)
+            target = compute_plan_target(sweep_date, profile.grocery_day, profile.planning_mode)
         except Exception as exc:
             conn.rollback()
             failed += 1
@@ -55,8 +55,8 @@ def run_sweep(conn, sweep_date: datetime.date, generator, access_token: str | No
                 error_type=type(exc).__name__,
             )
             continue
-        if decision.should_trigger:
-            triggered.append((profile, decision))
+        if target is not None:
+            triggered.append((profile, target))
         else:
             skipped += 1
 
@@ -64,16 +64,15 @@ def run_sweep(conn, sweep_date: datetime.date, generator, access_token: str | No
     # tuple through each context instead of issuing five catalog queries for every profile.
     catalog = build_generation_catalog(conn) if triggered else ()
 
-    for profile, decision in triggered:
-        assert decision.grocery_day_date is not None
-        week_start = _week_start_for_grocery_day(decision.grocery_day_date)
+    for profile, target in triggered:
         try:
             outcome = run_generation_engine(
                 conn,
                 profile.id,
-                week_start,
+                target.week_start,
                 generator,
                 catalog=catalog,
+                start_date=target.start_date,
             )
             if outcome is None:
                 skipped += 1

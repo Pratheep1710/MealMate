@@ -23,7 +23,7 @@ from app.services.generation_engine import run_generation_engine
 from app.services.instant_fallback import build_instant_fallback
 from app.services.notification_dispatch import dispatch_week_ready
 from app.services.openai_generation import OpenAIWeeklyMenuGenerator
-from app.services.planning_trigger import compute_first_plan_start, week_start_monday
+from app.services.planning_trigger import PlanTarget, compute_first_plan_start, compute_plan_target
 
 router = APIRouter()
 
@@ -33,23 +33,19 @@ def _today_ist() -> datetime.date:
     return datetime.datetime.now(ist).date()
 
 
-def _run_and_notify(config: AppConfig, user_id: uuid.UUID, first_plan_start: datetime.date) -> None:
+def _run_and_notify(config: AppConfig, user_id: uuid.UUID, target: PlanTarget) -> None:
     """The actual background work — a fresh connection of its own (BackgroundTasks run before
     yield-dependency cleanup, so reusing the request's connection would technically work, but a
     dedicated one here keeps this function independently callable/testable without threading the
     request's connection through it).
 
-    `start_date=first_plan_start`, not `week_start` — first_plan_start may be mid-week (the same
-    off-cycle/partial-week mechanism `build_generation_context`'s own `start_date` param already
-    supports for "regenerate remaining week"); passing the Monday instead would silently ask for
-    the whole week starting from a date that may be in the past relative to when the user should
-    actually start.
+    The target is calculated before enqueueing and matches the scheduled sweep's grocery-week
+    scope. The trigger date is only a scheduling date, not the start of the generated plan.
     """
-    week_start = week_start_monday(first_plan_start)
     generator = OpenAIWeeklyMenuGenerator(config.openai.api_key, config.openai.model)
     with connect(config) as conn:
         outcome = run_generation_engine(
-            conn, user_id, week_start, generator, start_date=first_plan_start
+            conn, user_id, target.week_start, generator, start_date=target.start_date
         )
         if outcome is not None:
             dispatch_week_ready(conn, outcome, config.expo.access_token)
@@ -79,13 +75,14 @@ def trigger_generation(
     first_plan_start = compute_first_plan_start(
         _today_ist(), profile.grocery_day, profile.planning_mode
     )
-    week_start = week_start_monday(first_plan_start)
+    target = compute_plan_target(first_plan_start, profile.grocery_day, profile.planning_mode)
+    assert target is not None
 
     # The real generation call is slow (an LLM round trip) — schedule it and return immediately
     # rather than making onboarding wait on it. MP-092's own screen state is what the mobile
     # client actually watches to know when this finished; this response is not that signal.
-    background_tasks.add_task(_run_and_notify, config, user_id, first_plan_start)
-    return TriggerResponse(week_start=week_start)
+    background_tasks.add_task(_run_and_notify, config, user_id, target)
+    return TriggerResponse(week_start=target.week_start)
 
 
 class InstantFallbackItem(BaseModel):

@@ -119,9 +119,10 @@ def test_trigger_generation_schedules_the_background_task_and_returns_202(
     # suggestion mode triggers grocery_day - 1 = Friday; Thursday is one day before that Friday.
     assert response.json() == {"week_start": "2026-09-07"}
     assert len(calls) == 1
-    _, called_user_id, called_first_plan_start = calls[0]
+    _, called_user_id, called_target = calls[0]
     assert called_user_id == user_id
-    assert called_first_plan_start == datetime.date(2026, 9, 11)
+    assert called_target.week_start == datetime.date(2026, 9, 7)
+    assert called_target.start_date == datetime.date(2026, 9, 7)
 
 
 def test_instant_fallback_requires_auth(client: TestClient) -> None:
@@ -130,6 +131,47 @@ def test_instant_fallback_requires_auth(client: TestClient) -> None:
     response = client.get("/plan/instant-fallback")
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("today", "grocery_day", "mode", "expected_week"),
+    [
+        (datetime.date(2026, 9, 27), "monday", "suggestion", "2026-09-28"),
+        (datetime.date(2026, 9, 28), "sunday", "reserves", "2026-09-21"),
+    ],
+)
+def test_endpoint_and_sweep_target_the_same_grocery_week(
+    client, monkeypatch, today, grocery_day, mode, expected_week
+) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from scripts import run_weekly_generation as sweep
+
+    profile = _profile(grocery_day=grocery_day, planning_mode=mode)
+    config = _configured_app_config()
+    app.dependency_overrides[get_current_user_id] = lambda: profile.id
+    app.dependency_overrides[get_db] = lambda: object()
+    app.dependency_overrides[get_config] = lambda: config
+    monkeypatch.setattr(routes.profiles_repo, "get_profile", lambda *args: profile)
+    monkeypatch.setattr(routes.profiles_repo, "list_profiles", lambda *args: [profile])
+    monkeypatch.setattr(routes, "_today_ist", lambda: today)
+    monkeypatch.setattr(routes, "connect", lambda *args: nullcontext(object()))
+    monkeypatch.setattr(sweep, "build_generation_catalog", lambda *args: ())
+    calls = []
+
+    def generate(conn, user_id, week_start, generator, **kwargs):
+        calls.append((week_start, kwargs.get("start_date")))
+        return None
+
+    monkeypatch.setattr(routes, "run_generation_engine", generate)
+    monkeypatch.setattr(sweep, "run_generation_engine", generate)
+    response = client.post("/generation/trigger")
+    sweep.run_sweep(SimpleNamespace(rollback=lambda: None), today, object(), None)
+
+    assert response.json() == {"week_start": expected_week}
+    assert calls[0] == calls[1]
+    assert calls[0][0].isoformat() == expected_week
 
 
 def test_instant_fallback_returns_the_fallback_items_as_json(
@@ -205,6 +247,56 @@ def _make_user_with_profile(conn: psycopg.Connection[DictRow], user_id: uuid.UUI
         "values (%s, %s, %s, %s)",
         (user_id, [], "monday", "suggestion"),
     )
+
+
+def test_sequential_onboarding_posts_preserve_completed_plan_and_user_edits(
+    client, monkeypatch, pg_dsn
+) -> None:
+    user_id = uuid.uuid4()
+    config = _configured_app_config()
+    calls = []
+
+    class Generator:
+        def generate(self, messages):
+            calls.append(messages)
+            raise GenerationProviderError("use the deterministic fallback")
+
+    monkeypatch.setattr(routes, "OpenAIWeeklyMenuGenerator", lambda *args: Generator())
+    monkeypatch.setattr(routes, "_today_ist", lambda: datetime.date(2026, 9, 27))
+    monkeypatch.setattr(
+        routes, "connect", lambda *args: psycopg.connect(**pg_dsn, row_factory=dict_row)
+    )
+    monkeypatch.setattr(routes, "dispatch_week_ready", lambda *args: False)
+    app.dependency_overrides[get_current_user_id] = lambda: user_id
+    app.dependency_overrides[get_config] = lambda: config
+    with psycopg.connect(**pg_dsn, autocommit=True, row_factory=dict_row) as conn:
+        _make_user_with_profile(conn, user_id)
+        app.dependency_overrides[get_db] = lambda: conn
+        try:
+            first = client.post("/generation/trigger")
+            assert first.status_code == 202
+            assert first.json() == {"week_start": "2026-09-28"}
+            conn.execute(
+                "update plan_items set make_extra = true where id = "
+                "(select pi.id from plan_items pi join meal_plans mp on mp.id = pi.plan_id "
+                "where mp.user_id = %s limit 1)", (user_id,),
+            )
+
+            def saved_items():
+                return conn.execute(
+                    "select pi.* from plan_items pi join meal_plans mp on mp.id = pi.plan_id "
+                    "where mp.user_id = %s order by pi.id", (user_id,),
+                ).fetchall()
+
+            before = saved_items()
+            assert before and any(item["make_extra"] for item in before)
+            calls_before = len(calls)
+            assert calls_before == 2  # provider failure + retry, then fallback completes the job
+            assert client.post("/generation/trigger").status_code == 202
+            assert len(calls) == calls_before
+            assert saved_items() == before
+        finally:
+            conn.execute("delete from auth.users where id = %s", (user_id,))
 
 
 def test_a_near_simultaneous_sweep_and_endpoint_trigger_only_generate_once(

@@ -127,3 +127,31 @@ def test_dishes_by_id_covers_every_selected_item(monkeypatch: pytest.MonkeyPatch
     for item in fallback.items:
         if item.dish_id is not None:
             assert item.dish_id in fallback.dishes_by_id
+
+
+def test_sunday_preview_includes_monday_with_real_context_and_eligibility(monkeypatch) -> None:
+    from app.services import generation_context as contexts
+
+    fixture = make_context(restrictions=["Nuts"], diet_type="vegetarian", egg_frequency=None)
+    unsafe = fixture.catalog[0].dishes[0].model_copy(update={"dietary_flags": ["Nuts"]})
+    fixture = replace_dish(fixture, fixture.catalog[0].dishes[0], unsafe)
+    monkeypatch.setattr(contexts.profiles_repo, "get_profile", lambda *args: fixture.profile)
+    monkeypatch.setattr(contexts.profiles_repo, "list_favorite_dish_ids", lambda *args: [])
+    monkeypatch.setattr(contexts, "build_generation_catalog", lambda *args: fixture.catalog)
+    monkeypatch.setattr(contexts, "get_variety_exclusion_set", lambda *args: set())
+    monkeypatch.setattr(contexts.history_repo, "get_dish_last_used_dates", lambda *args: {})
+    monkeypatch.setattr(contexts.history_repo, "get_nonveg_plan_dates", lambda *args: set())
+
+    preview = instant_fallback.build_instant_fallback(
+        object(), fixture.profile.id, datetime.date(2026, 9, 27)
+    )
+
+    assert {item.day for item in preview.items} == {
+        datetime.date(2026, 9, 27), datetime.date(2026, 9, 28)
+    }
+    monday_slots = {item.slot for item in preview.items if item.day == datetime.date(2026, 9, 28)}
+    assert {"morning", "afternoon", "night"} <= monday_slots
+    assert all(item.dish_id != unsafe.id for item in preview.items)
+    assert all(
+        item.dish_id is None or item.dish_id in preview.dishes_by_id for item in preview.items
+    )

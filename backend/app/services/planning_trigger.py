@@ -84,3 +84,24 @@ def week_start_monday(date: datetime.date) -> datetime.date:
     call site (the live /generation/trigger endpoint) needs the exact same thing.
     """
     return date - datetime.timedelta(days=date.weekday())
+
+
+@dataclass(frozen=True)
+class PlanTarget:
+    week_start: datetime.date
+    start_date: datetime.date
+
+
+def compute_plan_target(
+    trigger_date: datetime.date, grocery_day: str, planning_mode: str
+) -> PlanTarget | None:
+    """Use the grocery occurrence's calendar week for both scheduled and onboarding jobs.
+
+    Preserve the sweep's full-week scope, including its Reserves availability/snapshot anchor.
+    The trigger date can fall outside that week and is never a plan-date boundary.
+    """
+    decision = compute_trigger(trigger_date, grocery_day, planning_mode)
+    if decision.grocery_day_date is None:
+        return None
+    week_start = week_start_monday(decision.grocery_day_date)
+    return PlanTarget(week_start=week_start, start_date=week_start)
