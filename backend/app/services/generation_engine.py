@@ -36,13 +36,13 @@ def _claim(
     conn: psycopg.Connection[DictRow],
     user_id: uuid.UUID,
     week_start: datetime.date,
-    start_date: datetime.date | None,
+    allow_completed_job_restart: bool,
 ) -> GenerationJob | None:
     claimed = claim_job(conn, user_id, week_start)
     if claimed is not None:
         return claimed
     existing = jobs_repo.claim_or_create_job(conn, user_id, week_start)
-    if start_date is not None:
+    if allow_completed_job_restart:
         return jobs_repo.try_restart_processing(conn, existing.id)
     return jobs_repo.try_retry_failed(conn, existing.id)
 
@@ -164,12 +164,17 @@ def run_generation_engine(
     *,
     start_date: datetime.date | None = None,
     catalog: tuple[CatalogGroup, ...] | None = None,
+    allow_completed_job_restart: bool = False,
 ) -> GenerationOutcome | None:
-    """Run one claimed generation, returning ``None`` when idempotency says it already ran."""
+    """Run one claimed generation; only explicit regeneration may restart completed jobs.
+
+    ``start_date`` controls plan scope, independently of permission to replace a completed plan.
+    Failed jobs remain retryable by both scheduled and onboarding callers.
+    """
     job: GenerationJob | None = None
     with correlation_context(user_id=str(user_id), week_start=week_start.isoformat()):
         try:
-            job = _claim(conn, user_id, week_start, start_date)
+            job = _claim(conn, user_id, week_start, allow_completed_job_restart)
             if job is None:
                 return None
             conn.commit()  # release the atomic claim before the external model call

@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 
+import { triggerGeneration } from '../lib/backendClient';
 import { supabase } from '../lib/supabase';
 import type { DayName, DietType, EggFrequency, MeatType } from '../lib/onboardingVocabulary';
 import { useProfile } from './ProfileContext';
@@ -78,6 +79,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         if (error) {
           return { error: error.message };
         }
+        // MP-094: fires the real generation trigger right away, best-effort. Never awaited and
+        // never lets its rejection surface as an onboarding error — offline, the backend not
+        // being deployed yet, or a transient failure must not block onboarding completion; the
+        // scheduled sweep (run_weekly_generation.py) still generates this user's first plan on
+        // its own schedule if this call never lands.
+        triggerGeneration().catch(() => {});
         await refresh();
         return { error: null };
       },

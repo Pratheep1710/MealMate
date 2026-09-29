@@ -1,0 +1,45 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec) for the Phase 9 (MP-092/093/094)
+# live FastAPI service — backend/app/main.py, previously never deployed (scheduled-script-only
+# architecture). Not applied automatically: Pratheep creates the Render service from this file
+# via Render's dashboard ("New +" -> "Blueprint", pointing at this repo), then sets the `sync:
+# false` secrets below in that service's Environment tab — see backend/.env.example for what each
+# one is and where to find its value.
+#
+# NOTE: render.com is unreachable from this session (egress-blocked), so the field names below
+# could not be verified against Render's current live docs before committing this file. They
+# match the Blueprint spec as documented as of this repo's last known-good reference; if Render
+# rejects a field on the first deploy attempt, check the field name (not the intent) against
+# https://render.com/docs/blueprint-spec before reporting the deploy as blocked.
+services:
+  - type: web
+    name: mealmate-backend
+    runtime: python
+    plan: starter
+    region: singapore
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_DB_HOST
+        sync: false
+      - key: SUPABASE_DB_PORT
+        sync: false
+      - key: SUPABASE_DB_USER
+        sync: false
+      - key: SUPABASE_DB_PASSWORD
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: EXPO_ACCESS_TOKEN
+        sync: false

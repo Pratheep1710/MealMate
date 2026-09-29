@@ -22,7 +22,7 @@ export const CHRONOLOGICAL_SLOTS: readonly Slot[] = [...SLOTS].sort(
   (a, b) => SLOT_META[a].hour - SLOT_META[b].hour,
 );
 
-function toISODate(date: Date): string {
+export function toISODate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -95,4 +95,33 @@ export function phaseFor(slot: Slot, currentHour: number): SlotPhase {
     return 'now';
   }
   return 'upcoming';
+}
+
+export type RelevantSlots = { date: Date; slots: Slot[] };
+
+const MAX_RELEVANT_SLOTS = 2;
+
+/** MP-092: which slot(s) to show right after onboarding, based on the time the user signs up —
+ * the one place this decision is made, reused by WeekPlanScreen's progressive-reveal state
+ * rather than redefined inline. Built on SLOT_META/phaseFor's own boundaries, not new ones.
+ *
+ * Late-night edge case (explicit, not incidental): once `now` reaches the day's last slot
+ * (snack_3, 21:30) there is nothing left "upcoming" for today by definition — phaseFor would
+ * just keep returning that one slot as 'now' for the rest of the night with nothing after it, so
+ * showing it as the fallback would read as "here's a snack" rather than "here's your next meal."
+ * Past that boundary this rolls to tomorrow's morning + afternoon instead.
+ */
+export function nextRelevantSlots(now: Date): RelevantSlots {
+  const currentHour = now.getHours() + now.getMinutes() / 60;
+  const lastChronologicalSlot = CHRONOLOGICAL_SLOTS[CHRONOLOGICAL_SLOTS.length - 1];
+  const lastSlotHour = SLOT_META[lastChronologicalSlot].hour;
+
+  if (currentHour >= lastSlotHour) {
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    return { date: tomorrow, slots: ['morning', 'afternoon'] };
+  }
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const upcoming = CHRONOLOGICAL_SLOTS.filter((slot) => phaseFor(slot, currentHour) !== 'past');
+  return { date: today, slots: upcoming.slice(0, MAX_RELEVANT_SLOTS) };
 }

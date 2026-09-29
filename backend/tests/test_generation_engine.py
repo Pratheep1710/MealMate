@@ -162,7 +162,7 @@ def test_scheduled_claim_atomically_retries_a_failed_job(
     monkeypatch.setattr(generation_engine.jobs_repo, "try_retry_failed", lambda *args: retried)
 
     claimed = generation_engine._claim(  # type: ignore[arg-type]
-        _Connection(), failed.user_id, WEEK_START, None
+        _Connection(), failed.user_id, WEEK_START, False
     )
 
     assert claimed == retried
@@ -188,3 +188,54 @@ def test_persistence_failure_marks_job_failed_and_rolls_back(
 
     assert conn.rollbacks == 1
     assert updates[-1][0] == "failed"
+
+
+@pytest.mark.parametrize("explicit_regeneration", [False, True])
+def test_completed_plan_only_replaced_by_explicit_regeneration(
+    monkeypatch, explicit_regeneration
+) -> None:
+    context = make_context()
+    initial = _job()
+    completed = None
+    writes = []
+    # Keep the engine real; emulate only the repository's conditional status transitions.
+    monkeypatch.setattr(
+        generation_engine, "claim_job", lambda *args: initial if completed is None else None
+    )
+    monkeypatch.setattr(
+        generation_engine.jobs_repo, "claim_or_create_job", lambda *args: completed
+    )
+    monkeypatch.setattr(generation_engine.jobs_repo, "try_retry_failed", lambda *args: None)
+    monkeypatch.setattr(
+        generation_engine.jobs_repo, "try_restart_processing", lambda *args: initial
+    )
+    monkeypatch.setattr(generation_engine, "build_generation_context", lambda *a, **kw: context)
+
+    def update(conn, job_id, status, **kwargs):
+        nonlocal completed
+        job = initial.model_copy(update={"status": status})
+        if status == "done":
+            completed = job
+        return job
+
+    monkeypatch.setattr(generation_engine.jobs_repo, "update_job_status", update)
+    persistence = SimpleNamespace(notification=SimpleNamespace(id=uuid.uuid4()))
+    monkeypatch.setattr(
+        generation_engine,
+        "persist_generated_plan",
+        lambda *args: writes.append(args) or persistence,
+    )
+    generator = _SequenceGenerator([menu_for_context(context), menu_for_context(context)])
+    conn = _Connection()
+    first = generation_engine.run_generation_engine(
+        conn, initial.user_id, WEEK_START, generator, start_date=WEEK_START
+    )
+    retry = generation_engine.run_generation_engine(
+        conn, initial.user_id, WEEK_START, generator, start_date=WEEK_START,
+        allow_completed_job_restart=explicit_regeneration,
+    )
+
+    assert first is not None
+    assert (retry is not None) == explicit_regeneration
+    assert len(generator.messages) == (2 if explicit_regeneration else 1)
+    assert len(writes) == (2 if explicit_regeneration else 1)

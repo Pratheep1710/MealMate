@@ -74,3 +74,34 @@ def compute_first_plan_start(
         if compute_trigger(candidate, grocery_day, planning_mode).should_trigger:
             return candidate
     raise AssertionError("unreachable: the trigger day recurs at least once every 7 days")
+
+
+def week_start_monday(date: datetime.date) -> datetime.date:
+    """Phase 9 (MP-094): the Monday of the calendar week containing `date` — mirrors the SQL
+    function of the same name (supabase/migrations/0019_plan_item_edit_rpcs.sql's
+    week_start_monday) and the one-liner backend/scripts/run_weekly_generation.py's
+    _week_start_for_grocery_day already computes ad hoc, given a proper home now that a second
+    call site (the live /generation/trigger endpoint) needs the exact same thing.
+    """
+    return date - datetime.timedelta(days=date.weekday())
+
+
+@dataclass(frozen=True)
+class PlanTarget:
+    week_start: datetime.date
+    start_date: datetime.date
+
+
+def compute_plan_target(
+    trigger_date: datetime.date, grocery_day: str, planning_mode: str
+) -> PlanTarget | None:
+    """Use the grocery occurrence's calendar week for both scheduled and onboarding jobs.
+
+    Preserve the sweep's full-week scope, including its Reserves availability/snapshot anchor.
+    The trigger date can fall outside that week and is never a plan-date boundary.
+    """
+    decision = compute_trigger(trigger_date, grocery_day, planning_mode)
+    if decision.grocery_day_date is None:
+        return None
+    week_start = week_start_monday(decision.grocery_day_date)
+    return PlanTarget(week_start=week_start, start_date=week_start)

@@ -34,6 +34,15 @@ class SupabaseConfig(BaseModel):
     db_port: int = 5432
     db_user: str = Field(min_length=1, default="postgres")
     db_password: str = Field(min_length=1)
+    # Phase 9 (MP-092/093/094): verifies the mobile client's Supabase access token in
+    # app/auth.py's FastAPI dependency (Project Settings -> API -> JWT Settings on the Supabase
+    # dashboard — distinct from anon_key/service_role_key above). Optional here, the same way
+    # ExpoConfig.access_token is optional: the three existing scheduled scripts (weekly
+    # generation, daily reminder, notification reconciliation) call load_config() too and have no
+    # reason to carry this secret. app/auth.py itself fails fast with a clear error the first time
+    # a request actually needs it and it's unset, rather than this module failing globally for
+    # every load_config() caller.
+    jwt_secret: str | None = Field(default=None, min_length=1)
 
 
 class OpenAIConfig(BaseModel):
@@ -73,6 +82,7 @@ _SUPABASE_ENV = {
     "db_port": "SUPABASE_DB_PORT",
     "db_user": "SUPABASE_DB_USER",
     "db_password": "SUPABASE_DB_PASSWORD",
+    "jwt_secret": "SUPABASE_JWT_SECRET",
 }
 _OPENAI_ENV = {
     "api_key": "OPENAI_API_KEY",

@@ -1,4 +1,11 @@
-import { CHRONOLOGICAL_SLOTS, kickerFor, phaseFor, rollingDays, SLOT_META } from '../rollingDays';
+import {
+  CHRONOLOGICAL_SLOTS,
+  kickerFor,
+  nextRelevantSlots,
+  phaseFor,
+  rollingDays,
+  SLOT_META,
+} from '../rollingDays';
 
 describe('rollingDays', () => {
   it('returns today plus the next five days, in order', () => {
@@ -62,5 +69,45 @@ describe('phaseFor', () => {
 
   it('keeps the last slot as now for the rest of the night', () => {
     expect(phaseFor('snack_3', 23)).toBe('now');
+  });
+});
+
+describe('nextRelevantSlots', () => {
+  it("returns the current slot plus the next one when it's mid-afternoon", () => {
+    // 17:00 -> snack_2 (16:15) is 'now', night (19:45) is the next upcoming slot.
+    const result = nextRelevantSlots(new Date(2026, 7, 27, 17, 0));
+
+    expect(result.date.toDateString()).toBe(new Date(2026, 7, 27).toDateString());
+    expect(result.slots).toEqual(['snack_2', 'night']);
+  });
+
+  it('returns the first two slots of the day before any slot has started', () => {
+    // 3:00am -> nothing has started yet; the first two chronological slots are next.
+    const result = nextRelevantSlots(new Date(2026, 7, 27, 3, 0));
+
+    expect(result.date.toDateString()).toBe(new Date(2026, 7, 27).toDateString());
+    expect(result.slots).toEqual(['morning', 'snack_1']);
+  });
+
+  it('rolls over to tomorrow morning + afternoon once the last slot of the day has started', () => {
+    // Explicit late-night edge case: onboarding at/after snack_3 (21:30) has nothing "upcoming"
+    // left for today, so this must not just hand back that one already-started slot.
+    const result = nextRelevantSlots(new Date(2026, 7, 27, 21, 30));
+
+    expect(result.date.toDateString()).toBe(new Date(2026, 7, 28).toDateString());
+    expect(result.slots).toEqual(['morning', 'afternoon']);
+  });
+
+  it('still rolls to tomorrow well after midnight the same "night"', () => {
+    const result = nextRelevantSlots(new Date(2026, 7, 27, 23, 45));
+
+    expect(result.date.toDateString()).toBe(new Date(2026, 7, 28).toDateString());
+    expect(result.slots).toEqual(['morning', 'afternoon']);
+  });
+
+  it('rolls a late-night onboarding across a month boundary correctly', () => {
+    const result = nextRelevantSlots(new Date(2026, 7, 31, 22, 0));
+
+    expect(result.date.toDateString()).toBe(new Date(2026, 8, 1).toDateString());
   });
 });

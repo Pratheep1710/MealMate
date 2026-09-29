@@ -20,6 +20,7 @@ def test_valid_config_loads():
     assert config.supabase.db_host == "db.example.supabase.co"
     assert config.supabase.db_port == 5432
     assert config.supabase.db_user == "postgres"
+    assert config.supabase.jwt_secret is None
     assert config.openai.model == "gpt-test-model"
     assert config.expo.access_token is None
     assert config.render.is_render is False
@@ -30,6 +31,7 @@ def test_valid_config_with_optional_fields_set():
         **VALID_ENV,
         "SUPABASE_DB_PORT": "6543",
         "SUPABASE_DB_USER": "postgres.myproject",
+        "SUPABASE_JWT_SECRET": "jwt-secret-value",
         "EXPO_ACCESS_TOKEN": "expo-token",
         "RENDER_SERVICE_ID": "srv-123",
         "RENDER_GIT_COMMIT": "abc123",
@@ -37,6 +39,7 @@ def test_valid_config_with_optional_fields_set():
     config = load_config(env)
     assert config.supabase.db_port == 6543
     assert config.supabase.db_user == "postgres.myproject"
+    assert config.supabase.jwt_secret == "jwt-secret-value"
     assert config.expo.access_token == "expo-token"
     assert config.render.service_id == "srv-123"
     assert config.render.is_render is True
@@ -85,10 +88,18 @@ def test_invalid_supabase_url_fails_with_clear_message_not_a_stack_trace():
 
 
 def test_error_message_never_contains_secret_values():
-    env = {**VALID_ENV, "OPENAI_API_KEY": ""}
+    env = {**VALID_ENV, "OPENAI_API_KEY": "", "SUPABASE_JWT_SECRET": "jwt-secret-value"}
     with pytest.raises(ConfigError) as exc_info:
         load_config(env)
     message = str(exc_info.value)
     assert "sk-test-value" not in message
     assert VALID_ENV["SUPABASE_SERVICE_ROLE_KEY"] not in message
     assert VALID_ENV["SUPABASE_DB_PASSWORD"] not in message
+    assert "jwt-secret-value" not in message
+
+
+def test_an_empty_jwt_secret_fails_with_a_clear_message_not_silently_treated_as_unset():
+    env = {**VALID_ENV, "SUPABASE_JWT_SECRET": ""}
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(env)
+    assert "SUPABASE_JWT_SECRET" in str(exc_info.value)
